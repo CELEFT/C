@@ -1,0 +1,28 @@
+name: Clone and Compress ONNX Runtime
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone ONNX Runtime with submodules
+        run: git clone --recursive https://github.com/microsoft/onnxruntime.git
+
+      - name: Create tar archive
+        run: tar -cf onnxruntime.tar onnxruntime
+
+      - name: Compress with xz (extreme, multi-threaded)
+        run: xz -9e -T0 onnxruntime.tar
+
+      - name: Upload compressed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: onnxruntime-compressed
+          path: onnxruntime.tar.xz
