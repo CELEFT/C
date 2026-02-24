@@ -1,4 +1,4 @@
-name: Build onnxruntime for Python 3.10.19 on Debian 13 ARM64
+name: Build onnxruntime for Debian 13 ARM64 (Python 3.10.19)
 
 on:
   push:
@@ -15,16 +15,23 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Build onnxruntime in Debian 13 container
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run build in Debian 13 ARM64 container
         run: |
+          # Create a local directory to store the built wheels
+          mkdir -p ${{ github.workspace }}/dist
+
           docker run --rm --privileged \
             --platform linux/arm64 \
-            -v /sys:/sys \
+            -v ${{ github.workspace }}/dist:/build/dist \
+            -w /workspace \
             arm64v8/debian:trixie \
             bash -c "
-              set -e  # Exit on any error
+              set -e
 
-              # Install system dependencies
+              # Install system dependencies for building Python and onnxruntime
               apt-get update
               apt-get install -y \
                 wget build-essential libssl-dev zlib1g-dev libbz2-dev \
@@ -32,46 +39,33 @@ jobs:
                 libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev \
                 cmake git protobuf-compiler libprotobuf-dev ccache
 
-              # Download and compile Python 3.10.19
+              # Compile and install Python 3.10.19
               cd /tmp
               wget https://www.python.org/ftp/python/3.10.19/Python-3.10.19.tgz
               tar -xzf Python-3.10.19.tgz
               cd Python-3.10.19
               ./configure --enable-optimizations --prefix=/usr/local/python3.10
-              make -j\$(nproc)  # Use all cores, but can reduce if memory limited
+              make -j\$(nproc)
               make install
 
-              # Add Python 3.10 to PATH
+              # Add Python 3.10 to PATH and verify
               export PATH=/usr/local/python3.10/bin:\$PATH
               python3.10 --version
 
-              # Create virtual environment
-              python3.10 -m venv /venv310
-              source /venv310/bin/activate
-              pip install --upgrade pip numpy packaging wheel
+              # Clone onnxruntime repository
+              git clone --recursive https://github.com/microsoft/onnxruntime.git /onnxruntime_src
+              cd /onnxruntime_src
 
-              # Clone onnxruntime with submodules
-              git clone --recursive https://github.com/microsoft/onnxruntime.git
-              cd onnxruntime
-
-              # Build onnxruntime with custom CMake options
-              python3 tools/ci_build/build.py \
-                --build_dir build/Linux \
-                --config Release \
-                --build_shared_lib \
-                --parallel \
-                --enable_pybind \
-                --cmake_extra_defines onnxruntime_ENABLE_CPUINFO=OFF \
-                --cmake_extra_defines Python_EXECUTABLE=/venv310/bin/python
-
-              # Install the generated wheel
-              cd build/Linux/Release/dist
-              pip install onnxruntime-*.whl
-              python -c \"import onnxruntime; print('ONNX Runtime version:', onnxruntime.__version__)\"
+              # Use the official build script, overriding Python interpreter and adding cpuinfo disable flag
+              ./tools/ci_build/github/linux/build_linux_python_package.sh \
+                -d CPU \
+                -p /usr/local/python3.10/bin/python3.10 \
+                -c Release \
+                -x \"--cmake_extra_defines onnxruntime_ENABLE_CPUINFO=OFF\"
             "
 
-      - name: Upload wheel artifact
+      - name: Upload built wheel as artifact
         uses: actions/upload-artifact@v4
         with:
           name: onnxruntime-debian13-arm64-py310-wheel
-          path: onnxruntime/build/Linux/Release/dist/onnxruntime-*.whl
+          path: ${{ github.workspace }}/dist/*.whl
