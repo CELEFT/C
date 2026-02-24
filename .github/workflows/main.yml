@@ -1,4 +1,4 @@
-name: Build onnxruntime for Debian 13 (ARM64) via QEMU
+name: Build onnxruntime for Python 3.10.19 on Debian 13 ARM64
 
 on:
   push:
@@ -7,63 +7,65 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04               # x86_64 runner
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU
+      - name: Set up QEMU for ARM64 emulation
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Run build in Debian 13 ARM64 container
+      - name: Build onnxruntime in Debian 13 container
         run: |
           docker run --rm --privileged \
             --platform linux/arm64 \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace \
+            -v /sys:/sys \
             arm64v8/debian:trixie \
             bash -c "
-              set -e
-              # 安装系统依赖
+              set -e  # Exit on any error
+
+              # Install system dependencies
               apt-get update
-              apt-get install -y cmake build-essential git python3 python3-dev python3-pip python3-venv wget protobuf-compiler libprotobuf-dev libssl-dev
-              
-              # 创建并激活虚拟环境
-              python3 -m venv /venv
-              source /venv/bin/activate
-              
-              # 安装 Python 构建依赖
+              apt-get install -y \
+                wget build-essential libssl-dev zlib1g-dev libbz2-dev \
+                libreadline-dev libsqlite3-dev libncursesw5-dev xz-utils tk-dev \
+                libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev \
+                cmake git protobuf-compiler libprotobuf-dev ccache
+
+              # Download and compile Python 3.10.19
+              cd /tmp
+              wget https://www.python.org/ftp/python/3.10.19/Python-3.10.19.tgz
+              tar -xzf Python-3.10.19.tgz
+              cd Python-3.10.19
+              ./configure --enable-optimizations --prefix=/usr/local/python3.10
+              make -j\$(nproc)  # Use all cores, but can reduce if memory limited
+              make install
+
+              # Add Python 3.10 to PATH
+              export PATH=/usr/local/python3.10/bin:\$PATH
+              python3.10 --version
+
+              # Create virtual environment
+              python3.10 -m venv /venv310
+              source /venv310/bin/activate
               pip install --upgrade pip numpy packaging wheel
-              
-              # 克隆 onnxruntime（包含子模块）
+
+              # Clone onnxruntime with submodules
               git clone --recursive https://github.com/microsoft/onnxruntime.git
-              
-              # 调试：查看 onnxruntime 目录内容
               cd onnxruntime
-              echo '=== onnxruntime directory contents ==='
-              ls -la
-              
-              # 创建 build 目录并使用现代 CMake 语法配置
-              mkdir build
-              cmake -S . -B build \
-                -Donnxruntime_ENABLE_CPUINFO=OFF \
-                -DCMAKE_BUILD_TYPE=Release \
-                -Donnxruntime_BUILD_SHARED_LIB=ON \
-                -Donnxruntime_BUILD_PYTHON=ON \
-                -DPython_EXECUTABLE=/venv/bin/python
-              
-              # 编译
-              cd build
-              make -j\$(nproc)
-              
-              # 安装生成的 wheel 并测试
-              cd Release/dist
+
+              # Build onnxruntime with custom CMake options
+              python3 tools/ci_build/build.py \
+                --build_dir build/Linux \
+                --config Release \
+                --build_shared_lib \
+                --parallel \
+                --enable_pybind \
+                --cmake_extra_defines onnxruntime_ENABLE_CPUINFO=OFF \
+                --cmake_extra_defines Python_EXECUTABLE=/venv310/bin/python
+
+              # Install the generated wheel
+              cd build/Linux/Release/dist
               pip install onnxruntime-*.whl
               python -c \"import onnxruntime; print('ONNX Runtime version:', onnxruntime.__version__)\"
             "
@@ -71,5 +73,5 @@ jobs:
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: onnxruntime-debian13-arm64-wheel
-          path: onnxruntime/build/Release/dist/onnxruntime-*.whl
+          name: onnxruntime-debian13-arm64-py310-wheel
+          path: onnxruntime/build/Linux/Release/dist/onnxruntime-*.whl
