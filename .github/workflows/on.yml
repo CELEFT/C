@@ -20,7 +20,6 @@ jobs:
 
       - name: Run build in Debian 13 ARM64 container
         run: |
-          # Create a local directory to store the built wheels
           mkdir -p ${{ github.workspace }}/dist
 
           docker run --rm --privileged \
@@ -31,7 +30,7 @@ jobs:
             bash -c "
               set -e
 
-              # Install system dependencies for building Python and onnxruntime
+              # Install system dependencies
               apt-get update
               apt-get install -y \
                 wget build-essential libssl-dev zlib1g-dev libbz2-dev \
@@ -48,20 +47,19 @@ jobs:
               make -j\$(nproc)
               make install
 
-              # Add Python 3.10 to PATH and verify
               export PATH=/usr/local/python3.10/bin:\$PATH
               python3.10 --version
 
-              # Clone onnxruntime repository
+              # Clone onnxruntime
               git clone --recursive https://github.com/microsoft/onnxruntime.git /onnxruntime_src
               cd /onnxruntime_src
 
-              # Use the official build script, overriding Python interpreter and adding cpuinfo disable flag
+              # Build with custom options, including allow_running_as_root
               ./tools/ci_build/github/linux/build_linux_python_package.sh \
                 -d CPU \
                 -p /usr/local/python3.10/bin/python3.10 \
                 -c Release \
-                -x \"--cmake_extra_defines onnxruntime_ENABLE_CPUINFO=OFF\"
+                -x \"--allow_running_as_root --cmake_extra_defines onnxruntime_ENABLE_CPUINFO=OFF\"
             "
 
       - name: Upload built wheel as artifact
