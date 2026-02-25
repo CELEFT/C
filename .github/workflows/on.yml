@@ -1,4 +1,4 @@
-name: Build onnxruntime for Debian 13 ARM64 (Python 3.10.19)
+name: Build Python 3.10.19 and onnxruntime for Debian 13 ARM64
 
 on:
   push:
@@ -6,55 +6,87 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-python:
     runs-on: ubuntu-24.04
-
     steps:
-      - name: Set up QEMU for ARM64 emulation
+      - name: Set up QEMU for ARM64
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Run build in Debian 13 ARM64 container
+      - name: Compile Python 3.10.19 in Debian 13 container
         run: |
-          mkdir -p ${{ github.workspace }}/dist
-
           docker run --rm --privileged \
             --platform linux/arm64 \
-            -v ${{ github.workspace }}/dist:/build/dist \
-            -w /workspace \
+            -v ${{ github.workspace }}/python-install:/python-install \
             arm64v8/debian:trixie \
             bash -c "
               set -e
-
-              # Install system dependencies
               apt-get update
-              apt-get install -y \
-                wget build-essential libssl-dev zlib1g-dev libbz2-dev \
+              apt-get install -y wget build-essential libssl-dev zlib1g-dev libbz2-dev \
                 libreadline-dev libsqlite3-dev libncursesw5-dev xz-utils tk-dev \
-                libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev \
-                cmake git protobuf-compiler libprotobuf-dev ccache
-
-              # Compile and install Python 3.10.19
+                libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev
               cd /tmp
               wget https://www.python.org/ftp/python/3.10.19/Python-3.10.19.tgz
               tar -xzf Python-3.10.19.tgz
               cd Python-3.10.19
               ./configure --enable-optimizations --prefix=/usr/local/python3.10
               make -j\$(nproc)
-              make install
+              make install DESTDIR=/python-install
+              cd /python-install
+              tar -czf /python-install/python3.10.tar.gz usr/local/python3.10
+            "
 
+      - name: Upload Python 3.10.19 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python3.10-debian13-arm64
+          path: ${{ github.workspace }}/python-install/python3.10.tar.gz
+
+  build-onnxruntime:
+    needs: build-python
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Set up QEMU for ARM64
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Download Python artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python3.10-debian13-arm64
+          path: ${{ github.workspace }}/python-artifact
+
+      - name: Build onnxruntime using pre-built Python
+        run: |
+          mkdir -p ${{ github.workspace }}/dist
+
+          docker run --rm --privileged \
+            --platform linux/arm64 \
+            -v ${{ github.workspace }}/python-artifact:/python-artifact \
+            -v ${{ github.workspace }}/dist:/build/dist \
+            -w /workspace \
+            arm64v8/debian:trixie \
+            bash -c "
+              set -e
+              # Install onnxruntime build dependencies
+              apt-get update
+              apt-get install -y cmake build-essential git protobuf-compiler libprotobuf-dev ccache
+
+              # Extract and use pre-built Python
+              tar -xzf /python-artifact/python3.10.tar.gz -C /
               export PATH=/usr/local/python3.10/bin:\$PATH
               python3.10 --version
+
+              # Install Python build tools
+              python3.10 -m pip install --upgrade pip numpy packaging wheel
 
               # Clone onnxruntime
               git clone --recursive https://github.com/microsoft/onnxruntime.git /onnxruntime_src
               cd /onnxruntime_src
 
-              # Build with custom options, including allow_running_as_root
+              # Build onnxruntime with custom options
               ./tools/ci_build/github/linux/build_linux_python_package.sh \
                 -d CPU \
                 -p /usr/local/python3.10/bin/python3.10 \
@@ -62,7 +94,7 @@ jobs:
                 -x \"--allow_running_as_root --cmake_extra_defines onnxruntime_ENABLE_CPUINFO=OFF\"
             "
 
-      - name: Upload built wheel as artifact
+      - name: Upload onnxruntime wheel
         uses: actions/upload-artifact@v4
         with:
           name: onnxruntime-debian13-arm64-py310-wheel
