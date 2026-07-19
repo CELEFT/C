@@ -7,10 +7,6 @@ MSVBCRT.AIO    https://www.ghxi.com/yxkhj.html
 
 
 
-[我们只是天之骄子的陪衬](https://mrcsjj.cn)
-
-
-
 
 收款码
 ![截图](./IMG_20260603_224102.png)
@@ -26,5 +22,4 @@ Qrcode 3694039797
 
 
 
-[我们只是天之骄子的陪衬](https://mrcsjj.cn)
 [友链](https://lrg.ccwu.cc)
