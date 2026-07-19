@@ -1,4 +1,10 @@
-windows运行库
+windows运行库[点击下载](https://github.com/CELEFT/C/releases/download/windows-runing-library/GRLPackage_7.3.26.0715_mefcl.exe)
+[详情](https://github.com/CELEFT/C/releases/tag/windows-runing-library)
+
+
+
+you can get from :
+
 GRLPackage    https://www.mefcl.com/grlpackage.html
 MSVBCRT.AIO    https://www.ghxi.com/yxkhj.html
 
