@@ -1,3 +1,12 @@
+windows运行库
+GRLPackage    https://www.mefcl.com/grlpackage.html
+MSVBCRT.AIO    https://www.ghxi.com/yxkhj.html
+
+
+
+
+
+
 [我们只是天之骄子的陪衬](https://mrcsjj.cn)
 
 
