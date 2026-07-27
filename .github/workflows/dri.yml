@@ -15,6 +15,7 @@ jobs:
       MESA_VERSION: 26.1.5
       NDK_ZIP: android-ndk-r30-beta2-linux.zip
       API_LEVEL: 35
+      OPENSSL_PREFIX: ${{ github.workspace }}/openssl-android
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -61,6 +62,22 @@ jobs:
           unzip -q libdrm.zip -d ${{ github.workspace }}/libdrm-android
           echo "PKG_CONFIG_PATH=${{ github.workspace }}/libdrm-android/libdrm/lib/pkgconfig" >> $GITHUB_ENV
 
+      - name: Download prebuilt OpenSSL
+        run: |
+          wget -q https://github.com/CELEFT/C/releases/download/libdrm/openssl.zip
+          unzip -q openssl.zip -d ${{ env.OPENSSL_PREFIX }}
+          # 解压后实际路径为 $OPENSSL_PREFIX/openssl
+          echo "OPENSSL_DIR=${{ env.OPENSSL_PREFIX }}/openssl" >> $GITHUB_ENV
+          # 设置 CFLAGS 和 LDFLAGS 供编译器查找
+          echo "CFLAGS=-I${{ env.OPENSSL_PREFIX }}/openssl/include" >> $GITHUB_ENV
+          echo "LDFLAGS=-L${{ env.OPENSSL_PREFIX }}/openssl/lib" >> $GITHUB_ENV
+          # 如果存在 pkgconfig，也添加到 PKG_CONFIG_PATH
+          if [ -d "${{ env.OPENSSL_PREFIX }}/openssl/lib/pkgconfig" ]; then
+            echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH:${{ env.OPENSSL_PREFIX }}/openssl/lib/pkgconfig" >> $GITHUB_ENV
+          fi
+          # 调试：查看结构
+          ls -R ${{ env.OPENSSL_PREFIX }}
+
       - name: Generate cross-file for Meson
         run: |
           cat > ${{ github.workspace }}/android-arm64.ini << 'EOF'
@@ -69,7 +86,7 @@ jobs:
           cpp = '${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.API_LEVEL }}-clang++'
           ar = '${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
           strip = '${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
-          pkgconfig = '/usr/bin/pkg-config'
+          pkg-config = '/usr/bin/pkg-config'
 
           [built-in options]
           pkg_config_path = '${{ env.PKG_CONFIG_PATH }}'
@@ -103,7 +120,6 @@ jobs:
             -Dvalgrind=disabled \
             -Dgles1=disabled \
             -Dfreedreno-kmds=kgsl \
-            -Dlibarchive=disabled \
             -Dbuildtype=release
 
       - name: Compile Mesa
