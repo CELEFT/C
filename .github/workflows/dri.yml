@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-android:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest   # 改为最新 Ubuntu 版本
     env:
       ANDROID_NDK_HOME: ${{ github.workspace }}/android-ndk
       MESA_VERSION: 26.1.5
@@ -32,14 +32,22 @@ jobs:
             libxcb-present-dev libxcb-randr0-dev \
             libxcb-shm0-dev libxcb-sync-dev \
             libxshmfence-dev libxxf86vm-dev \
-            libgl1-mesa-dev \
-            glslang-tools   # 提供 glslangValidator
+            libgl1-mesa-dev
           pip3 install mako
 
       - name: Upgrade Meson to latest
         run: |
           pip3 install --upgrade meson
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      # 安装最新 glslang（满足 >= 12.2 要求）
+      - name: Install latest glslang
+        run: |
+          GLSLANG_VERSION=14.0.0
+          wget -q https://github.com/KhronosGroup/glslang/releases/download/${GLSLANG_VERSION}/glslang-${GLSLANG_VERSION}-linux-Release.zip
+          unzip -q glslang-${GLSLANG_VERSION}-linux-Release.zip -d glslang-temp
+          sudo cp glslang-temp/bin/glslangValidator /usr/local/bin/
+          glslangValidator --version
 
       - name: Download and extract Android NDK
         run: |
@@ -59,8 +67,7 @@ jobs:
         run: |
           wget -q https://github.com/CELEFT/C/releases/download/libdrm/libdrm.zip
           unzip -q libdrm.zip -d ${{ github.workspace }}/libdrm-android
-          # 调试：查看解压结构
-          ls -R ${{ github.workspace }}/libdrm-android
+          ls -R ${{ github.workspace }}/libdrm-android  # 调试用
           echo "PKG_CONFIG_PATH=${{ github.workspace }}/libdrm-android/libdrm/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Generate cross-file for Meson
