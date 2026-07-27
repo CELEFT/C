@@ -32,10 +32,10 @@ jobs:
             libxcb-present-dev libxcb-randr0-dev \
             libxcb-shm0-dev libxcb-sync-dev \
             libxshmfence-dev libxxf86vm-dev \
-            libgl1-mesa-dev
+            libgl1-mesa-dev \
+            glslang-tools   # 提供 glslangValidator
           pip3 install mako
 
-      # 关键修复：升级 Meson 到最新版本以满足 Mesa 26.1.5 的要求
       - name: Upgrade Meson to latest
         run: |
           pip3 install --upgrade meson
@@ -59,7 +59,7 @@ jobs:
         run: |
           wget -q https://github.com/CELEFT/C/releases/download/libdrm/libdrm.zip
           unzip -q libdrm.zip -d ${{ github.workspace }}/libdrm-android
-          # 确认解压后的目录结构（可选调试）
+          # 调试：查看解压结构
           ls -R ${{ github.workspace }}/libdrm-android
           echo "PKG_CONFIG_PATH=${{ github.workspace }}/libdrm-android/libdrm/lib/pkgconfig" >> $GITHUB_ENV
 
