@@ -1,0 +1,154 @@
+name: Build libarchive for Android (CMake + Ninja)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 允许手动触发
+
+env:
+  # NDK 配置
+  NDK_URL: https://googledownloads.cn/android/repository/android-ndk-r30-beta2-linux.zip
+  NDK_ZIP: android-ndk-r30-beta2-linux.zip
+  NDK_DIR: android-ndk-r30-beta2
+  
+  # 编译目标配置
+  API_LEVEL: 35
+  TARGET_ARCH: arm64-v8a
+
+jobs:
+  build-android-arm64:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # ================= 1. 环境准备 =================
+      - name: Install Ninja and Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build unzip wget
+
+      - name: Download and Setup Android NDK
+        run: |
+          echo "Downloading NDK r30-beta2..."
+          wget -q --show-progress $NDK_URL -O $NDK_ZIP
+          unzip -q $NDK_ZIP
+          rm $NDK_ZIP
+          echo "NDK_ROOT=$GITHUB_WORKSPACE/$NDK_DIR" >> $GITHUB_ENV
+
+      - name: Setup CMake Directories
+        run: |
+          echo "DEPS_DIR=$GITHUB_WORKSPACE/deps" >> $GITHUB_ENV
+          echo "INSTALL_DIR=$GITHUB_WORKSPACE/install" >> $GITHUB_ENV
+          mkdir -p $GITHUB_WORKSPACE/deps
+          mkdir -p $GITHUB_WORKSPACE/install
+
+      # ================= 2. 主动克隆最新源码 =================
+      - name: Clone All Latest Sources
+        run: |
+          mkdir -p src && cd src
+          # 使用 --depth 1 浅克隆加速
+          git clone --depth 1 https://github.com/tukaani-project/xz.git
+          git clone --depth 1 https://github.com/facebook/zstd.git
+          git clone --depth 1 https://github.com/libarchive/bzip2.git
+          git clone --depth 1 https://github.com/lz4/lz4.git
+          git clone --depth 1 https://github.com/libarchive/libarchive.git
+
+      # ================= 3. 定义公共 CMake 参数 =================
+      - name: Export Common CMake Args
+        run: |
+          # 将公共参数导出为环境变量，方便后续步骤复用
+          echo "CMAKE_ARGS=-G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$NDK_ROOT/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=$TARGET_ARCH \
+            -DANDROID_PLATFORM=android-$API_LEVEL \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_INSTALL_PREFIX=$DEPS_DIR" >> $GITHUB_ENV
+
+      # ================= 4. 编译底层依赖库 =================
+      
+      - name: Build XZ Utils (liblzma)
+        run: |
+          cd src/xz
+          cmake -B build $CMAKE_ARGS -DBUILD_TESTING=OFF
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Build Zstandard (libzstd)
+        run: |
+          cd src/zstd/build/cmake
+          cmake -B build $CMAKE_ARGS \
+            -DZSTD_BUILD_PROGRAMS=OFF \
+            -DZSTD_BUILD_SHARED=OFF \
+            -DZSTD_BUILD_STATIC=ON
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Build Bzip2 (Inject CMakeLists)
+        run: |
+          cd src/bzip2
+          # bzip2 官方无 CMakeLists，动态注入一个标准的 CMake 构建文件
+          cat << 'EOF' > CMakeLists.txt
+cmake_minimum_required(VERSION 3.15)
+project(bzip2 C)
+add_library(bz2 STATIC blocksort.c huffman.c crctable.c randtable.c compress.c decompress.c bzlib.c)
+target_include_directories(bz2 PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
+install(TARGETS bz2 ARCHIVE DESTINATION lib)
+install(FILES bzlib.h DESTINATION include)
+EOF
+          cmake -B build $CMAKE_ARGS
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Build LZ4 (liblz4)
+        run: |
+          cd src/lz4/build/cmake
+          cmake -B build $CMAKE_ARGS \
+            -DLZ4_BUILD_CLI=OFF \
+            -DLZ4_BUILD_LEGACY_LZ4C=OFF
+          cmake --build build --parallel
+          cmake --install build
+
+      # ================= 5. 编译 libarchive 核心库 =================
+      - name: Build libarchive
+        run: |
+          cd src/libarchive
+          
+          # ⚠️ 核心修复：Android NDK toolchain 会覆盖 CMAKE_FIND_ROOT_PATH，
+          # 必须同时设置 PREFIX_PATH 和 FIND_ROOT_PATH，并将 MODE 设为 BOTH 才能找到依赖库。
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$NDK_ROOT/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=$TARGET_ARCH \
+            -DANDROID_PLATFORM=android-$API_LEVEL \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR \
+            -DCMAKE_PREFIX_PATH="$DEPS_DIR" \
+            -DCMAKE_FIND_ROOT_PATH="$DEPS_DIR" \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+            -DENABLE_TEST=OFF \
+            -DENABLE_TAR=OFF \
+            -DENABLE_CPIO=OFF \
+            -DENABLE_CAT=OFF \
+            -DENABLE_WERROR=OFF
+            
+          cmake --build build --parallel
+          cmake --install build
+
+      # ================= 6. 验证与上传 =================
+      - name: Verify Build Output
+        run: |
+          echo "=== 验证静态库 ==="
+          ls -lh $INSTALL_DIR/lib/*.a
+          echo "=== 验证头文件 ==="
+          ls -lh $INSTALL_DIR/include/archive.h
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libarchive-android-arm64-v8a-api35-cmake
+          path: |
+            ${{ env.INSTALL_DIR }}/lib/*.a
+            ${{ env.INSTALL_DIR }}/include/**/*.h
+          retention-days: 30
