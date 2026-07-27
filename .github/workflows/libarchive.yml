@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  # 稳定版 NDK（r26c）
+  # 稳定版 NDK r26c
   NDK_URL: https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
   NDK_ZIP: android-ndk-r26c-linux.zip
   NDK_DIR: android-ndk-r26c
@@ -92,19 +92,19 @@ jobs:
           cmake --build build --parallel
           cmake --install build
 
-      # ----- Bzip2 (注入 CMakeLists) -----
+      # ----- Bzip2 (使用 printf 写入 CMakeLists.txt，避免 YAML 缩进问题) -----
       - name: Build Bzip2
         run: |
           cd src/bzip2
-          cat << 'EOF' > CMakeLists.txt
-cmake_minimum_required(VERSION 3.15)
-project(bzip2 C)
-add_library(bz2 STATIC blocksort.c huffman.c crctable.c randtable.c compress.c decompress.c bzlib.c)
-target_compile_definitions(bz2 PRIVATE BZ_UNIX _FILE_OFFSET_BITS=64)
-target_include_directories(bz2 PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
-install(TARGETS bz2 ARCHIVE DESTINATION lib)
-install(FILES bzlib.h DESTINATION include)
-EOF
+          printf '%s\n' \
+            'cmake_minimum_required(VERSION 3.15)' \
+            'project(bzip2 C)' \
+            'add_library(bz2 STATIC blocksort.c huffman.c crctable.c randtable.c compress.c decompress.c bzlib.c)' \
+            'target_compile_definitions(bz2 PRIVATE BZ_UNIX _FILE_OFFSET_BITS=64)' \
+            'target_include_directories(bz2 PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)' \
+            'install(TARGETS bz2 ARCHIVE DESTINATION lib)' \
+            'install(FILES bzlib.h DESTINATION include)' \
+            > CMakeLists.txt
           cmake -B build $CMAKE_ARGS
           cmake --build build --parallel
           cmake --install build
@@ -120,7 +120,7 @@ EOF
           cmake --build build --parallel
           cmake --install build
 
-      # ----- libarchive (核心) -----
+      # ----- libarchive -----
       - name: Build libarchive
         run: |
           cd src/libarchive
