@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-android:
-    runs-on: ubuntu-latest   # 改为最新 Ubuntu 版本
+    runs-on: ubuntu-latest
     env:
       ANDROID_NDK_HOME: ${{ github.workspace }}/android-ndk
       MESA_VERSION: 26.1.5
@@ -32,22 +32,14 @@ jobs:
             libxcb-present-dev libxcb-randr0-dev \
             libxcb-shm0-dev libxcb-sync-dev \
             libxshmfence-dev libxxf86vm-dev \
-            libgl1-mesa-dev
+            libgl1-mesa-dev \
+            glslang-tools   # Ubuntu 24.04 提供 14.0.0，满足要求
           pip3 install mako
 
       - name: Upgrade Meson to latest
         run: |
           pip3 install --upgrade meson
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-      # 安装最新 glslang（满足 >= 12.2 要求）
-      - name: Install latest glslang
-        run: |
-          GLSLANG_VERSION=14.0.0
-          wget -q https://github.com/KhronosGroup/glslang/releases/download/${GLSLANG_VERSION}/glslang-${GLSLANG_VERSION}-linux-Release.zip
-          unzip -q glslang-${GLSLANG_VERSION}-linux-Release.zip -d glslang-temp
-          sudo cp glslang-temp/bin/glslangValidator /usr/local/bin/
-          glslangValidator --version
 
       - name: Download and extract Android NDK
         run: |
