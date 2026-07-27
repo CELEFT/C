@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 env:
-  # 使用您指定的 NDK r30-beta2
   NDK_URL: https://googledownloads.cn/android/repository/android-ndk-r30-beta2-linux.zip
   NDK_ZIP: android-ndk-r30-beta2-linux.zip
   NDK_DIR: android-ndk-r30-beta2
@@ -59,7 +58,6 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_INSTALL_PREFIX=$DEPS_DIR" >> $GITHUB_ENV
 
-      # ----- zlib -----
       - name: Build zlib
         run: |
           cd src/zlib
@@ -67,19 +65,16 @@ jobs:
           cmake --build build --parallel
           cmake --install build
 
-      # ----- XZ Utils -----
+      # ----- 修复 XZ：移除 -DXZ_ENCODERS/DECODERS，使用默认配置 -----
       - name: Build XZ Utils
         run: |
           cd src/xz
           cmake -B build $CMAKE_ARGS \
             -DBUILD_TESTING=OFF \
-            -DXZ_DECODERS=ON \
-            -DXZ_ENCODERS=ON \
             -DXZ_UTILS=OFF
           cmake --build build --parallel
           cmake --install build
 
-      # ----- Zstandard -----
       - name: Build Zstandard
         run: |
           cd src/zstd/build/cmake
@@ -92,7 +87,6 @@ jobs:
           cmake --build build --parallel
           cmake --install build
 
-      # ----- Bzip2 (使用 printf 写入 CMakeLists.txt，避免 YAML 缩进问题) -----
       - name: Build Bzip2
         run: |
           cd src/bzip2
@@ -109,7 +103,6 @@ jobs:
           cmake --build build --parallel
           cmake --install build
 
-      # ----- LZ4 -----
       - name: Build LZ4
         run: |
           cd src/lz4/build/cmake
@@ -120,7 +113,7 @@ jobs:
           cmake --build build --parallel
           cmake --install build
 
-      # ----- libarchive -----
+      # ----- libarchive 自动检测依赖，无需显式 -DENABLE_* -----
       - name: Build libarchive
         run: |
           cd src/libarchive
@@ -141,12 +134,7 @@ jobs:
             -DENABLE_TAR=OFF \
             -DENABLE_CPIO=OFF \
             -DENABLE_CAT=OFF \
-            -DENABLE_WERROR=OFF \
-            -DENABLE_ZLIB=ON \
-            -DENABLE_LZMA=ON \
-            -DENABLE_ZSTD=ON \
-            -DENABLE_BZIP2=ON \
-            -DENABLE_LZ4=ON
+            -DENABLE_WERROR=OFF
           cmake --build build --parallel
           cmake --install build
 
