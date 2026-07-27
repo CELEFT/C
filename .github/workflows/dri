@@ -1,0 +1,122 @@
+name: Build Mesa for Android (Freedreno + Zink + Virgl)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-22.04
+    env:
+      ANDROID_NDK_HOME: ${{ github.workspace }}/android-ndk
+      MESA_VERSION: 26.1.5
+      NDK_ZIP: android-ndk-r30-beta2-linux.zip
+      API_LEVEL: 35
+      # PKG_CONFIG_PATH 不再在此定义，将在步骤中动态设置
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            meson ninja-build pkg-config python3-pip \
+            flex bison git wget xz-utils unzip \
+            cmake build-essential \
+            libx11-dev libxext-dev libxdamage-dev \
+            libxcb-glx0-dev libx11-xcb-dev \
+            libxcb-dri2-0-dev libxcb-dri3-dev \
+            libxcb-present-dev libxcb-randr0-dev \
+            libxcb-shm0-dev libxcb-sync-dev \
+            libxshmfence-dev libxxf86vm-dev \
+            libgl1-mesa-dev
+          pip3 install mako
+
+      - name: Download and extract Android NDK
+        run: |
+          wget -q https://googledownloads.cn/android/repository/${{ env.NDK_ZIP }}
+          unzip -q ${{ env.NDK_ZIP }} -d ${{ env.ANDROID_NDK_HOME }}
+          mv ${{ env.ANDROID_NDK_HOME }}/android-ndk-r30-beta2/* ${{ env.ANDROID_NDK_HOME }}/
+          rmdir ${{ env.ANDROID_NDK_HOME }}/android-ndk-r30-beta2
+          echo "${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+
+      - name: Download Mesa source
+        run: |
+          wget -q https://archive.mesa3d.org/mesa-${{ env.MESA_VERSION }}.tar.xz
+          tar -xf mesa-${{ env.MESA_VERSION }}.tar.xz
+          mv mesa-${{ env.MESA_VERSION }} mesa
+
+      - name: Download prebuilt libdrm
+        run: |
+          wget -q https://github.com/CELEFT/C/releases/download/libdrm/libdrm.zip
+          unzip -q libdrm.zip -d ${{ github.workspace }}/libdrm-android
+          # 检查解压后的目录结构（调试用，可删除）
+          ls -R ${{ github.workspace }}/libdrm-android
+          # 设置 PKG_CONFIG_PATH 指向 lib/pkgconfig
+          # 假设 zip 解压后顶层目录为 libdrm，里面包含 lib 和 include
+          echo "PKG_CONFIG_PATH=${{ github.workspace }}/libdrm-android/libdrm/lib/pkgconfig" >> $GITHUB_ENV
+
+      - name: Generate cross-file for Meson
+        run: |
+          cat > ${{ github.workspace }}/android-arm64.ini << 'EOF'
+          [binaries]
+          c = '${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.API_LEVEL }}-clang'
+          cpp = '${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.API_LEVEL }}-clang++'
+          ar = '${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+          strip = '${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+          pkgconfig = '/usr/bin/pkg-config'
+
+          [built-in options]
+          pkg_config_path = '${{ env.PKG_CONFIG_PATH }}'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8'
+          endian = 'little'
+          EOF
+
+      - name: Configure Mesa build
+        working-directory: ${{ github.workspace }}/mesa
+        run: |
+          meson setup build-android/ \
+            --cross-file ${{ github.workspace }}/android-arm64.ini \
+            -Dplatforms=android \
+            -Dplatform-sdk-version=${{ env.API_LEVEL }} \
+            -Dandroid-stub=true \
+            -Dgallium-drivers=freedreno,zink,virgl \
+            -Dgallium-mediafoundation=disabled \
+            -Dvulkan-drivers=freedreno \
+            -Dvulkan-layers=device-select,overlay \
+            -Degl=disabled \
+            -Dgles2=enabled \
+            -Dglvnd=disabled \
+            -Dglx=disabled \
+            -Dlibunwind=disabled \
+            -Dintel-rt=disabled \
+            -Dmicrosoft-clc=disabled \
+            -Dvalgrind=disabled \
+            -Dgles1=disabled \
+            -Dfreedreno-kmds=kgsl \
+            -Dbuildtype=release
+
+      - name: Compile Mesa
+        working-directory: ${{ github.workspace }}/mesa
+        run: |
+          ninja -C build-android/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesa-android-${{ env.MESA_VERSION }}
+          path: |
+            ${{ github.workspace }}/mesa/build-android/src/gallium/targets/dri/*.so
+            ${{ github.workspace }}/mesa/build-android/src/gallium/targets/pipe-loader/*.so
+            ${{ github.workspace }}/mesa/build-android/src/vulkan/*.so
+            ${{ github.workspace }}/mesa/build-android/src/egl/*.so
+            ${{ github.workspace }}/mesa/build-android/src/gbm/*.so
+            ${{ github.workspace }}/mesa/build-android/src/loader/*.so
