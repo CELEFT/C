@@ -33,7 +33,7 @@ jobs:
             libxcb-shm0-dev libxcb-sync-dev \
             libxshmfence-dev libxxf86vm-dev \
             libgl1-mesa-dev \
-            glslang-tools   # Ubuntu 24.04 提供 14.0.0，满足要求
+            glslang-tools
           pip3 install mako
 
       - name: Upgrade Meson to latest
@@ -59,7 +59,6 @@ jobs:
         run: |
           wget -q https://github.com/CELEFT/C/releases/download/libdrm/libdrm.zip
           unzip -q libdrm.zip -d ${{ github.workspace }}/libdrm-android
-          ls -R ${{ github.workspace }}/libdrm-android  # 调试用
           echo "PKG_CONFIG_PATH=${{ github.workspace }}/libdrm-android/libdrm/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Generate cross-file for Meson
@@ -104,6 +103,7 @@ jobs:
             -Dvalgrind=disabled \
             -Dgles1=disabled \
             -Dfreedreno-kmds=kgsl \
+            -Dlibarchive=disabled \
             -Dbuildtype=release
 
       - name: Compile Mesa
