@@ -15,7 +15,6 @@ jobs:
       MESA_VERSION: 26.1.5
       NDK_ZIP: android-ndk-r30-beta2-linux.zip
       API_LEVEL: 35
-      # PKG_CONFIG_PATH 不再在此定义，将在步骤中动态设置
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,6 +35,12 @@ jobs:
             libgl1-mesa-dev
           pip3 install mako
 
+      # 关键修复：升级 Meson 到最新版本以满足 Mesa 26.1.5 的要求
+      - name: Upgrade Meson to latest
+        run: |
+          pip3 install --upgrade meson
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
       - name: Download and extract Android NDK
         run: |
           wget -q https://googledownloads.cn/android/repository/${{ env.NDK_ZIP }}
@@ -54,10 +59,8 @@ jobs:
         run: |
           wget -q https://github.com/CELEFT/C/releases/download/libdrm/libdrm.zip
           unzip -q libdrm.zip -d ${{ github.workspace }}/libdrm-android
-          # 检查解压后的目录结构（调试用，可删除）
+          # 确认解压后的目录结构（可选调试）
           ls -R ${{ github.workspace }}/libdrm-android
-          # 设置 PKG_CONFIG_PATH 指向 lib/pkgconfig
-          # 假设 zip 解压后顶层目录为 libdrm，里面包含 lib 和 include
           echo "PKG_CONFIG_PATH=${{ github.workspace }}/libdrm-android/libdrm/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Generate cross-file for Meson
