@@ -1,0 +1,64 @@
+name: Build OpenSSL for Android
+
+on:
+  workflow_dispatch:  # 允许手动触发
+
+env:
+  NDK_VERSION: r30-beta2
+  ANDROID_API: 35
+  TARGET_ARCH: arm64-v8a
+  OPENSSL_35_TAG: openssl-3.5.7
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 定义要构建的两个版本
+        openssl-version: [master, 3.5.7]
+    steps:
+      - name: Checkout OpenSSL (master)
+        if: matrix.openssl-version == 'master'
+        uses: actions/checkout@v4
+        with:
+          repository: openssl/openssl
+          ref: master
+          path: openssl_src
+
+      - name: Download OpenSSL 3.5.7
+        if: matrix.openssl-version == '3.5.7'
+        run: |
+          wget https://github.com/openssl/openssl/releases/download/${OPENSSL_35_TAG}/openssl-${OPENSSL_35_TAG}.tar.gz
+          tar -xzf openssl-${OPENSSL_35_TAG}.tar.gz
+          mv openssl-${OPENSSL_35_TAG} openssl_src
+
+      - name: Setup Android NDK
+        run: |
+          wget https://googledownloads.cn/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+          unzip android-ndk-${NDK_VERSION}-linux.zip
+          echo "ANDROID_NDK_ROOT=${{ github.workspace }}/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+
+      - name: Build OpenSSL
+        run: |
+          export PATH=${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          cd openssl_src
+
+          # 1. 配置（同时生成动态库和静态库）
+          ./Configure android-${TARGET_ARCH} \
+            -D__ANDROID_API__=${{ env.ANDROID_API }} \
+            shared \
+            --prefix=${{ github.workspace }}/output/${{ matrix.openssl-version }} \
+            --openssldir=${{ github.workspace }}/output/${{ matrix.openssl-version }}
+
+          # 2. 构建
+          make depend
+          make -j$(nproc)
+
+          # 3. 安装
+          make install_sw
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openssl-${{ matrix.openssl-version }}-android-${{ env.TARGET_ARCH }}
+          path: output/${{ matrix.openssl-version }}/
