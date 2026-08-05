@@ -1,7 +1,9 @@
-name: Build OpenSSL for Android
+name: Daily Build OpenSSL for Android
 
 on:
-  workflow_dispatch:  # 允许手动触发
+  schedule:
+    - cron: '0 0 * * *'          # 每天 UTC 0:00（北京时间 8:00）
+  workflow_dispatch:             # 允许手动触发
 
 env:
   NDK_VERSION: r30-beta2
@@ -12,53 +14,64 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        # 定义要构建的两个版本
-        openssl-version: [master, 3.5.7]
+    permissions:
+      contents: write            # 赋予创建 Release 的权限
+
     steps:
-      - name: Checkout OpenSSL (master)
-        if: matrix.openssl-version == 'master'
-        uses: actions/checkout@v4
-        with:
-          repository: openssl/openssl
-          ref: master
-          path: openssl_src
-
-      - name: Download OpenSSL 3.5.7
-        if: matrix.openssl-version == '3.5.7'
-        run: |
-          wget https://github.com/openssl/openssl/releases/download/${OPENSSL_35_TAG}/openssl-${OPENSSL_35_TAG}.tar.gz
-          tar -xzf openssl-${OPENSSL_35_TAG}.tar.gz
-          mv openssl-${OPENSSL_35_TAG} openssl_src
-
       - name: Setup Android NDK
         run: |
           wget https://googledownloads.cn/android/repository/android-ndk-${NDK_VERSION}-linux.zip
           unzip android-ndk-${NDK_VERSION}-linux.zip
           echo "ANDROID_NDK_ROOT=${{ github.workspace }}/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
 
-      - name: Build OpenSSL
+      - name: Build OpenSSL master
         run: |
           export PATH=${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-          cd openssl_src
-
-          # 1. 配置（同时生成动态库和静态库）
+          git clone https://github.com/openssl/openssl.git openssl_src_master
+          cd openssl_src_master
           ./Configure android-${TARGET_ARCH} \
             -D__ANDROID_API__=${{ env.ANDROID_API }} \
             shared \
-            --prefix=${{ github.workspace }}/output/${{ matrix.openssl-version }} \
-            --openssldir=${{ github.workspace }}/output/${{ matrix.openssl-version }}
-
-          # 2. 构建
+            --prefix=${{ github.workspace }}/output/master \
+            --openssldir=${{ github.workspace }}/output/master
           make depend
           make -j$(nproc)
-
-          # 3. 安装
           make install_sw
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: openssl-${{ matrix.openssl-version }}-android-${{ env.TARGET_ARCH }}
-          path: output/${{ matrix.openssl-version }}/
+      - name: Build OpenSSL 3.5.7
+        run: |
+          export PATH=${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          wget https://github.com/openssl/openssl/releases/download/${OPENSSL_35_TAG}/openssl-${OPENSSL_35_TAG}.tar.gz
+          tar -xzf openssl-${OPENSSL_35_TAG}.tar.gz
+          mv openssl-${OPENSSL_35_TAG} openssl_src_3.5.7
+          cd openssl_src_3.5.7
+          ./Configure android-${TARGET_ARCH} \
+            -D__ANDROID_API__=${{ env.ANDROID_API }} \
+            shared \
+            --prefix=${{ github.workspace }}/output/3.5.7 \
+            --openssldir=${{ github.workspace }}/output/3.5.7
+          make depend
+          make -j$(nproc)
+          make install_sw
+
+      - name: Package artifacts
+        run: |
+          cd output
+          tar -czf ../openssl-master-android-${TARGET_ARCH}.tar.gz master/
+          tar -czf ../openssl-3.5.7-android-${TARGET_ARCH}.tar.gz 3.5.7/
+
+      - name: Create Release and Upload Assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="daily-$(date +%Y%m%d)"
+          RELEASE_NAME="Daily Build $(date +%Y-%m-%d)"
+          # 如果当天已运行过，--force 会覆盖旧的 Release 和 Tag
+          gh release create "$TAG" \
+            --force \
+            --title "$RELEASE_NAME" \
+            --notes "Automated daily build of OpenSSL for Android arm64-v8a (master & 3.5.7 LTS)" \
+            --prerelease \
+            --target "${{ github.sha }}" \
+            openssl-master-android-${TARGET_ARCH}.tar.gz \
+            openssl-3.5.7-android-${TARGET_ARCH}.tar.gz
