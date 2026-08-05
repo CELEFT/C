@@ -2,8 +2,7 @@ name: OpenSSL Android 每日构建
 
 on:
   schedule:
-    # 每天 UTC 02:00 = 北京时间 10:00 自动构建，可自行调整
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * *'   # 每天 UTC 02:00 = 北京时间 10:00
   workflow_dispatch:
     inputs:
       version:
@@ -22,11 +21,9 @@ env:
   NDK_SHA1:  069427047d18cc6e44369cd7b8e711bfc2c7a3b5
   API_LEVEL: '35'
   ABI:       arm64-v8a
-  # arm64-v8a 对应 OpenSSL 的 android-arm64 目标
   OPENSSL_TARGET: android-arm64
 
 jobs:
-  # 根据手动触发时选择的版本，动态生成构建矩阵
   generate-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -68,10 +65,22 @@ jobs:
           unzip -q "$NDK_ZIP"
           rm -f "$NDK_ZIP"
 
-      - name: 设置 NDK 环境变量
+      # ========== 关键修复点 ==========
+      # OpenSSL 的 Configure 除了 ANDROID_NDK_ROOT，
+      # 还必须在 $PATH 中找到 NDK 的 LLVM 工具链（否则报
+      # "no NDK aarch64-linux-android-gcc on $PATH"）
+      - name: 设置 NDK 环境变量（含 PATH）
         run: |
           echo "ANDROID_NDK_ROOT=$GITHUB_WORKSPACE/$NDK_DIR" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$GITHUB_WORKSPACE/$NDK_DIR" >> "$GITHUB_ENV"
+          echo "NDK_BIN=$GITHUB_WORKSPACE/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_ENV"
+          echo "PATH=$GITHUB_WORKSPACE/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> "$GITHUB_ENV"
+
+      - name: 校验工具链（诊断）
+        run: |
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT"
+          ls "$NDK_BIN" | head -20
+          command -v aarch64-linux-android${API_LEVEL}-clang && echo "✅ clang 可用"
 
       # ---------- 获取 OpenSSL 源码 ----------
       - name: 拉取 OpenSSL master（最新）
@@ -91,7 +100,7 @@ jobs:
           mv openssl-3.5.7 openssl
 
       # ---------- 配置与编译 ----------
-      # OpenSSL 的 shared 模式会【同时】产出静态库 libcrypto.a/libssl.a 和动态库 libcrypto.so/libssl.so
+      # shared 模式同时产出 .a 静态库和 .so 动态库
       - name: 配置（shared：静态库 + 动态库）
         working-directory: openssl
         run: |
