@@ -25,7 +25,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ----- 使用你提供的链接下载 NDK r30 beta2 -----
+      # ----- 下载 NDK r30 beta2 -----
       - name: Download and setup Android NDK r30 beta2
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r30-beta2-linux.zip?hl=zh-cn -O ndk.zip
