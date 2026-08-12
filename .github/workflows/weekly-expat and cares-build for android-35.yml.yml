@@ -43,8 +43,9 @@ jobs:
       - name: Download Expat
         if: steps.cache-expat.outputs.cache-hit != 'true'
         run: |
-          wget https://github.com/libexpat/libexpat/releases/download/R_${{ env.EXPAT_VERSION }}/expat-${{ env.EXPAT_VERSION }}.tar.xz
-          tar -xf expat-${{ env.EXPAT_VERSION }}.tar.xz
+          # 使用硬编码的正确链接（标签为 R_2_8_3）
+          wget https://github.com/libexpat/libexpat/releases/download/R_2_8_3/expat-2.8.3.tar.xz
+          tar -xf expat-2.8.3.tar.xz
 
       - name: Cache c-ares source
         id: cache-cares
@@ -56,6 +57,7 @@ jobs:
       - name: Download c-ares
         if: steps.cache-cares.outputs.cache-hit != 'true'
         run: |
+          # c-ares 标签格式 v1.34.8，可以使用变量拼接
           wget https://github.com/c-ares/c-ares/releases/download/v${{ env.CARES_VERSION }}/c-ares-${{ env.CARES_VERSION }}.tar.gz
           tar -xzf c-ares-${{ env.CARES_VERSION }}.tar.gz
 
