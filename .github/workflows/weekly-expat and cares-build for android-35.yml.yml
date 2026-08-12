@@ -43,7 +43,6 @@ jobs:
       - name: Download Expat
         if: steps.cache-expat.outputs.cache-hit != 'true'
         run: |
-          # 使用硬编码的正确链接（标签为 R_2_8_3）
           wget https://github.com/libexpat/libexpat/releases/download/R_2_8_3/expat-2.8.3.tar.xz
           tar -xf expat-2.8.3.tar.xz
 
@@ -57,7 +56,6 @@ jobs:
       - name: Download c-ares
         if: steps.cache-cares.outputs.cache-hit != 'true'
         run: |
-          # c-ares 标签格式 v1.34.8，可以使用变量拼接
           wget https://github.com/c-ares/c-ares/releases/download/v${{ env.CARES_VERSION }}/c-ares-${{ env.CARES_VERSION }}.tar.gz
           tar -xzf c-ares-${{ env.CARES_VERSION }}.tar.gz
 
@@ -90,16 +88,33 @@ jobs:
             -DCARES_INSTALL=ON
           cmake --build build-cares-${{ matrix.abi }} --config Release
 
-      # ----- 分别打包成 tar.xz -----
+      # ----- 分别打包成 tar.xz（使用 find 动态定位 .so 文件）-----
       - name: Package libraries separately
         run: |
           export BUILD_DATE=$(date +%Y%m%d)
           export ABI="${{ matrix.abi }}"
 
           mkdir -p expat_pkg cares_pkg
-          cp build-expat-${ABI}/libexpat.so expat_pkg/
-          cp build-cares-${ABI}/libcares.so cares_pkg/
 
+          # 查找 Expat 共享库
+          EXPAT_SO=$(find build-expat-${ABI} -name "libexpat.so" | head -n 1)
+          if [ -z "$EXPAT_SO" ]; then
+            echo "❌ libexpat.so not found in build-expat-${ABI}"
+            ls -laR build-expat-${ABI}  # 输出目录结构以便调试
+            exit 1
+          fi
+          cp "$EXPAT_SO" expat_pkg/
+
+          # 查找 c-ares 共享库
+          CARES_SO=$(find build-cares-${ABI} -name "libcares.so" | head -n 1)
+          if [ -z "$CARES_SO" ]; then
+            echo "❌ libcares.so not found in build-cares-${ABI}"
+            ls -laR build-cares-${ABI}  # 输出目录结构以便调试
+            exit 1
+          fi
+          cp "$CARES_SO" cares_pkg/
+
+          # 打包（使用 xz -9e -T0 -z）
           (cd expat_pkg && tar -c libexpat.so) | xz -9e -T0 -z > libexpat-android-35-${{ env.EXPAT_VERSION }}-${BUILD_DATE}.tar.xz
           (cd cares_pkg && tar -c libcares.so) | xz -9e -T0 -z > libcares-android-35-${{ env.CARES_VERSION }}-${BUILD_DATE}.tar.xz
 
