@@ -1,4 +1,4 @@
-name: Weekly Android NDK Build
+name: Weekly Android NDK Build (Latest)
 
 on:
   schedule:
@@ -6,8 +6,6 @@ on:
   workflow_dispatch:
 
 env:
-  EXPAT_VERSION: 2.8.3
-  CARES_VERSION: 1.34.8
   NDK_VERSION: 30.0.15729638-beta2
   ANDROID_PLATFORM: android-35
   RELEASE_TAG: weekly-build
@@ -32,37 +30,20 @@ jobs:
           unzip -q ndk.zip -d ${{ runner.temp }}/ndk
           echo "ANDROID_NDK_ROOT=${{ runner.temp }}/ndk/android-ndk-r30-beta2" >> $GITHUB_ENV
 
-      # ----- 源码缓存与下载 -----
-      - name: Cache Expat source
-        id: cache-expat
-        uses: actions/cache@v4
-        with:
-          path: expat-${{ env.EXPAT_VERSION }}
-          key: expat-${{ env.EXPAT_VERSION }}
-
-      - name: Download Expat
-        if: steps.cache-expat.outputs.cache-hit != 'true'
+      # ----- 克隆最新 Expat 源码（无缓存，每次最新）-----
+      - name: Clone Expat latest
         run: |
-          wget https://github.com/libexpat/libexpat/releases/download/R_2_8_3/expat-2.8.3.tar.xz
-          tar -xf expat-2.8.3.tar.xz
+          git clone --depth 1 https://github.com/libexpat/libexpat.git expat-src
 
-      - name: Cache c-ares source
-        id: cache-cares
-        uses: actions/cache@v4
-        with:
-          path: c-ares-${{ env.CARES_VERSION }}
-          key: cares-${{ env.CARES_VERSION }}
-
-      - name: Download c-ares
-        if: steps.cache-cares.outputs.cache-hit != 'true'
+      # ----- 克隆最新 c-ares 源码（无缓存，每次最新）-----
+      - name: Clone c-ares latest
         run: |
-          wget https://github.com/c-ares/c-ares/releases/download/v${{ env.CARES_VERSION }}/c-ares-${{ env.CARES_VERSION }}.tar.gz
-          tar -xzf c-ares-${{ env.CARES_VERSION }}.tar.gz
+          git clone --depth 1 https://github.com/c-ares/c-ares.git cares-src
 
       # ----- 编译 Expat -----
       - name: Build Expat for ${{ matrix.abi }}
         run: |
-          cmake -S expat-${{ env.EXPAT_VERSION }} -B build-expat-${{ matrix.abi }} \
+          cmake -S expat-src -B build-expat-${{ matrix.abi }} \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=${{ env.ANDROID_PLATFORM }} \
@@ -77,7 +58,7 @@ jobs:
       # ----- 编译 c-ares -----
       - name: Build c-ares for ${{ matrix.abi }}
         run: |
-          cmake -S c-ares-${{ env.CARES_VERSION }} -B build-cares-${{ matrix.abi }} \
+          cmake -S cares-src -B build-cares-${{ matrix.abi }} \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=${{ env.ANDROID_PLATFORM }} \
@@ -88,7 +69,7 @@ jobs:
             -DCARES_INSTALL=ON
           cmake --build build-cares-${{ matrix.abi }} --config Release
 
-      # ----- 分别打包成 tar.xz（使用 find 动态定位 .so 文件）-----
+      # ----- 打包（动态查找 .so，命名只含日期）-----
       - name: Package libraries separately
         run: |
           export BUILD_DATE=$(date +%Y%m%d)
@@ -96,27 +77,25 @@ jobs:
 
           mkdir -p expat_pkg cares_pkg
 
-          # 查找 Expat 共享库
           EXPAT_SO=$(find build-expat-${ABI} -name "libexpat.so" | head -n 1)
           if [ -z "$EXPAT_SO" ]; then
-            echo "❌ libexpat.so not found in build-expat-${ABI}"
-            ls -laR build-expat-${ABI}  # 输出目录结构以便调试
+            echo "❌ libexpat.so not found"
+            ls -laR build-expat-${ABI}
             exit 1
           fi
           cp "$EXPAT_SO" expat_pkg/
 
-          # 查找 c-ares 共享库
           CARES_SO=$(find build-cares-${ABI} -name "libcares.so" | head -n 1)
           if [ -z "$CARES_SO" ]; then
-            echo "❌ libcares.so not found in build-cares-${ABI}"
-            ls -laR build-cares-${ABI}  # 输出目录结构以便调试
+            echo "❌ libcares.so not found"
+            ls -laR build-cares-${ABI}
             exit 1
           fi
           cp "$CARES_SO" cares_pkg/
 
-          # 打包（使用 xz -9e -T0 -z）
-          (cd expat_pkg && tar -c libexpat.so) | xz -9e -T0 -z > libexpat-android-35-${{ env.EXPAT_VERSION }}-${BUILD_DATE}.tar.xz
-          (cd cares_pkg && tar -c libcares.so) | xz -9e -T0 -z > libcares-android-35-${{ env.CARES_VERSION }}-${BUILD_DATE}.tar.xz
+          # 压缩包命名：库名-android-35-日期.tar.xz
+          (cd expat_pkg && tar -c libexpat.so) | xz -9e -T0 -z > libexpat-android-35-${BUILD_DATE}.tar.xz
+          (cd cares_pkg && tar -c libcares.so) | xz -9e -T0 -z > libcares-android-35-${BUILD_DATE}.tar.xz
 
       # ----- 上传 Artifact（保留 30 天）-----
       - name: Upload artifacts (30 days retention)
@@ -136,8 +115,7 @@ jobs:
           name: "Weekly Android Libraries (arm64-v8a)"
           body: |
             ##### 自动构建于 $(date -u +'%Y-%m-%d %H:%M UTC')
-            - Expat ${{ env.EXPAT_VERSION }}
-            - c-ares ${{ env.CARES_VERSION }}
+            - 源码：最新 Expat (master) 和 c-ares (main)
             - NDK ${{ env.NDK_VERSION }}
             - 目标平台 ${{ env.ANDROID_PLATFORM }}
           files: |
