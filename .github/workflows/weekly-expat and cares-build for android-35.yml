@@ -35,7 +35,7 @@ jobs:
       - name: Download and setup Android NDK (if not cached)
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip?hl=zh-cn -O ndk.zip
+          wget -q https://dl.google.com/android/repository/android-ndk-r30-beta2-linux.zip -O ndk.zip
           unzip -q ndk.zip -d ${{ runner.temp }}/ndk
 
       - name: Set NDK environment
