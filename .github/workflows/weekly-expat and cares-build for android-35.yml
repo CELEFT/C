@@ -6,13 +6,46 @@ on:
   workflow_dispatch:
 
 env:
-  NDK_VERSION: 30.0.15729638-beta2
+  NDK_VERSION: r30-beta2                     # 版本标识，用于缓存 key
   ANDROID_PLATFORM: android-35
   RELEASE_TAG: libexpat+libcares
 
 jobs:
+  # ==================== 第一步：配置环境 ====================
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      ndk_path: ${{ steps.set-ndk-path.outputs.ndk_path }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Cache Android NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          # 缓存整个 NDK 解压目录
+          path: ${{ runner.temp }}/ndk
+          key: ndk-${{ env.NDK_VERSION }}-linux
+
+      - name: Download and setup Android NDK (if not cached)
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip -O ndk.zip
+          unzip -q ndk.zip -d ${{ runner.temp }}/ndk
+
+      - name: Set NDK path output
+        id: set-ndk-path
+        run: |
+          echo "ndk_path=${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_OUTPUT
+
+  # ==================== 第二步：构建 Expat ====================
   build-expat:
     runs-on: ubuntu-latest
+    needs: prepare
     strategy:
       matrix:
         abi: [arm64-v8a]
@@ -25,18 +58,12 @@ jobs:
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
-      - name: Cache Android NDK
-        id: cache-ndk
+      # 恢复 NDK 缓存（与 prepare 使用相同 key）
+      - name: Restore Android NDK cache
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}
+          path: ${{ runner.temp }}/ndk
           key: ndk-${{ env.NDK_VERSION }}-linux
-
-      - name: Download and setup Android NDK (if not cached)
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
-        run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-r30-beta2-linux.zip -O ndk.zip
-          unzip -q ndk.zip -d ${{ runner.temp }}/ndk
 
       - name: Set NDK environment
         run: |
@@ -77,7 +104,6 @@ jobs:
           mkdir -p "${PKG_NAME}"
           cp -r install-expat-${ABI}/* "${PKG_NAME}/"
           tar -c "${PKG_NAME}" | xz -9e -T0 -z > "${PKG_NAME}.tar.xz"
-          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
           echo "PKG_NAME=$PKG_NAME" >> $GITHUB_ENV
 
       - name: Upload Expat artifact (30 days)
@@ -87,8 +113,10 @@ jobs:
           path: ${{ env.PKG_NAME }}.tar.xz
           retention-days: 30
 
+  # ==================== 第二步：构建 c-ares ====================
   build-cares:
     runs-on: ubuntu-latest
+    needs: prepare
     strategy:
       matrix:
         abi: [arm64-v8a]
@@ -101,18 +129,11 @@ jobs:
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
-      - name: Cache Android NDK
-        id: cache-ndk
+      - name: Restore Android NDK cache
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}
+          path: ${{ runner.temp }}/ndk
           key: ndk-${{ env.NDK_VERSION }}-linux
-
-      - name: Download and setup Android NDK (if not cached)
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
-        run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip?hl=zh-cn -O ndk.zip
-          unzip -q ndk.zip -d ${{ runner.temp }}/ndk
 
       - name: Set NDK environment
         run: |
@@ -151,7 +172,6 @@ jobs:
           mkdir -p "${PKG_NAME}"
           cp -r install-cares-${ABI}/* "${PKG_NAME}/"
           tar -c "${PKG_NAME}" | xz -9e -T0 -z > "${PKG_NAME}.tar.xz"
-          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
           echo "PKG_NAME=$PKG_NAME" >> $GITHUB_ENV
 
       - name: Upload c-ares artifact (30 days)
@@ -161,31 +181,29 @@ jobs:
           path: ${{ env.PKG_NAME }}.tar.xz
           retention-days: 30
 
+  # ==================== 第三步：发布 ====================
   release:
     runs-on: ubuntu-latest
     needs: [build-expat, build-cares]
-    if: success()
+    if: success()   # 仅当两个构建都成功时运行
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: List and move files
+      - name: Collect and move artifacts
         run: |
-          ls -la artifacts/
           find artifacts -name "*.tar.xz" -exec mv {} . \;
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: "Android Libraries (Expat & c-ares)"   # 固定名称，不再包含日期
+          name: "Android Libraries (Expat & c-ares)"
           body: |
             ##### 构建日期：$(date +%Y%m%d)
             - 源码：Expat (master) 和 c-ares (main)
