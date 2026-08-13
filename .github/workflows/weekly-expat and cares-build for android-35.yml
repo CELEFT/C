@@ -8,7 +8,7 @@ on:
 env:
   NDK_VERSION: 30.0.15729638-beta2
   ANDROID_PLATFORM: android-35
-  RELEASE_TAG: libexpat+libcares   # 修改 tag
+  RELEASE_TAG: libexpat+libcares
 
 jobs:
   build-expat:
@@ -25,11 +25,22 @@ jobs:
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
-      - name: Download and setup Android NDK
+      - name: Cache Android NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}-linux
+
+      - name: Download and setup Android NDK (if not cached)
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-r30-beta2-linux.zip?hl=zh-cn -O ndk.zip
+          wget -q https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip?hl=zh-cn -O ndk.zip
           unzip -q ndk.zip -d ${{ runner.temp }}/ndk
-          echo "ANDROID_NDK_ROOT=${{ runner.temp }}/ndk/android-ndk-r30-beta2" >> $GITHUB_ENV
+
+      - name: Set NDK environment
+        run: |
+          echo "ANDROID_NDK_ROOT=${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
 
       - name: Clone Expat (master)
         run: |
@@ -50,6 +61,7 @@ jobs:
             -DANDROID_PLATFORM=${{ env.ANDROID_PLATFORM }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_shared=ON \
+            -DBUILD_static=ON \
             -DBUILD_tools=OFF \
             -DBUILD_examples=OFF \
             -DBUILD_tests=OFF \
@@ -61,35 +73,19 @@ jobs:
         run: |
           export BUILD_DATE=$(date +%Y%m%d)
           export ABI="${{ matrix.abi }}"
+          export PKG_NAME="libexpat-android-35-${ABI}-${BUILD_DATE}"
+          mkdir -p "${PKG_NAME}"
+          cp -r install-expat-${ABI}/* "${PKG_NAME}/"
+          tar -c "${PKG_NAME}" | xz -9e -T0 -z > "${PKG_NAME}.tar.xz"
           echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
-          tar -c -C install-expat-${ABI} . | xz -9e -T0 -z > libexpat-android-35-${ABI}-${BUILD_DATE}.tar.xz
+          echo "PKG_NAME=$PKG_NAME" >> $GITHUB_ENV
 
       - name: Upload Expat artifact (30 days)
         uses: actions/upload-artifact@v4
         with:
           name: expat-${{ matrix.abi }}-${{ github.run_id }}
-          path: libexpat-android-35-*.tar.xz
+          path: ${{ env.PKG_NAME }}.tar.xz
           retention-days: 30
-
-      - name: Upload Expat to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: "Android Libraries (Expat & c-ares) - ${{ env.BUILD_DATE }}"
-          body: |
-            ##### 构建日期：${{ env.BUILD_DATE }}
-            - 源码：Expat (master) 和 c-ares (main)
-            - NDK ${{ env.NDK_VERSION }}
-            - 目标平台 ${{ env.ANDROID_PLATFORM }}
-            - 构建系统：Ninja
-            - ABI: ${{ matrix.abi }}
-          files: libexpat-android-35-*.tar.xz
-          prerelease: false
-          draft: false
-          append_body: false
-          overwrite_files: true   # 覆盖已存在的同名文件
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-cares:
     runs-on: ubuntu-latest
@@ -105,11 +101,22 @@ jobs:
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
-      - name: Download and setup Android NDK
+      - name: Cache Android NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}
+          key: ndk-${{ env.NDK_VERSION }}-linux
+
+      - name: Download and setup Android NDK (if not cached)
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-r30-beta2-linux.zip?hl=zh-cn -O ndk.zip
+          wget -q https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip?hl=zh-cn -O ndk.zip
           unzip -q ndk.zip -d ${{ runner.temp }}/ndk
-          echo "ANDROID_NDK_ROOT=${{ runner.temp }}/ndk/android-ndk-r30-beta2" >> $GITHUB_ENV
+
+      - name: Set NDK environment
+        run: |
+          echo "ANDROID_NDK_ROOT=${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
 
       - name: Clone c-ares (main)
         run: |
@@ -129,7 +136,7 @@ jobs:
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=${{ env.ANDROID_PLATFORM }} \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCARES_STATIC=OFF \
+            -DCARES_STATIC=ON \
             -DCARES_SHARED=ON \
             -DCARES_BUILD_TOOLS=OFF \
             -DCARES_INSTALL=ON
@@ -140,29 +147,57 @@ jobs:
         run: |
           export BUILD_DATE=$(date +%Y%m%d)
           export ABI="${{ matrix.abi }}"
+          export PKG_NAME="libcares-android-35-${ABI}-${BUILD_DATE}"
+          mkdir -p "${PKG_NAME}"
+          cp -r install-cares-${ABI}/* "${PKG_NAME}/"
+          tar -c "${PKG_NAME}" | xz -9e -T0 -z > "${PKG_NAME}.tar.xz"
           echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
-          tar -c -C install-cares-${ABI} . | xz -9e -T0 -z > libcares-android-35-${ABI}-${BUILD_DATE}.tar.xz
+          echo "PKG_NAME=$PKG_NAME" >> $GITHUB_ENV
 
       - name: Upload c-ares artifact (30 days)
         uses: actions/upload-artifact@v4
         with:
           name: cares-${{ matrix.abi }}-${{ github.run_id }}
-          path: libcares-android-35-*.tar.xz
+          path: ${{ env.PKG_NAME }}.tar.xz
           retention-days: 30
 
-      - name: Upload c-ares to Release
+  # ----- 发布 Job：仅在两个构建都成功时运行 -----
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-expat, build-cares]
+    if: success()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded files
+        run: |
+          ls -la artifacts/
+          # 将所有的 tar.xz 文件移动到当前目录（方便上传）
+          find artifacts -name "*.tar.xz" -exec mv {} . \;
+
+      - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: "Android Libraries (Expat & c-ares) - ${{ env.BUILD_DATE }}"
+          name: "Android Libraries (Expat & c-ares) - $(date +%Y%m%d)"
           body: |
-            ##### 构建日期：${{ env.BUILD_DATE }}
+            ##### 构建日期：$(date +%Y%m%d)
             - 源码：Expat (master) 和 c-ares (main)
             - NDK ${{ env.NDK_VERSION }}
             - 目标平台 ${{ env.ANDROID_PLATFORM }}
             - 构建系统：Ninja
-            - ABI: ${{ matrix.abi }}
-          files: libcares-android-35-*.tar.xz
+            - ABI: arm64-v8a
+            - 包含动态库 (.so) 和静态库 (.a)
+          files: |
+            *.tar.xz
           prerelease: false
           draft: false
           append_body: false
