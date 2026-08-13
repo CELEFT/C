@@ -11,7 +11,6 @@ env:
   RELEASE_TAG: weekly-build
 
 jobs:
-  # ---------- Expat Job ----------
   build-expat:
     runs-on: ubuntu-latest
     strategy:
@@ -35,18 +34,18 @@ jobs:
       - name: Clone Expat (master)
         run: |
           git clone --depth 1 --branch master https://github.com/libexpat/libexpat.git expat-src
-          ls -la expat-src
-          if [ ! -f expat-src/CMakeLists.txt ]; then
-            echo "ERROR: CMakeLists.txt not found"
+          # Expat 的 CMakeLists.txt 在 expat/ 子目录下
+          if [ ! -f expat-src/expat/CMakeLists.txt ]; then
+            echo "ERROR: expat-src/expat/CMakeLists.txt not found"
             exit 1
           fi
 
       - name: Build and install Expat for ${{ matrix.abi }}
         run: |
-          cd expat-src
-          cmake -B ../build-expat-${{ matrix.abi }} \
+          cd expat-src/expat
+          cmake -B ../../build-expat-${{ matrix.abi }} \
             -G Ninja \
-            -DCMAKE_INSTALL_PREFIX=$PWD/../install-expat-${{ matrix.abi }} \
+            -DCMAKE_INSTALL_PREFIX=$PWD/../../install-expat-${{ matrix.abi }} \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=${{ env.ANDROID_PLATFORM }} \
@@ -56,8 +55,8 @@ jobs:
             -DBUILD_examples=OFF \
             -DBUILD_tests=OFF \
             -DBUILD_doc=OFF
-          ninja -C ../build-expat-${{ matrix.abi }}
-          ninja -C ../build-expat-${{ matrix.abi }} install
+          ninja -C ../../build-expat-${{ matrix.abi }}
+          ninja -C ../../build-expat-${{ matrix.abi }} install
 
       - name: Package Expat install directory
         run: |
@@ -87,11 +86,10 @@ jobs:
           prerelease: false
           draft: false
           append_body: true
-          force: false   # 避免覆盖，因为两个 job 上传不同文件
+          force: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ---------- c-ares Job ----------
   build-cares:
     runs-on: ubuntu-latest
     strategy:
@@ -115,9 +113,8 @@ jobs:
       - name: Clone c-ares (main)
         run: |
           git clone --depth 1 --branch main https://github.com/c-ares/c-ares.git cares-src
-          ls -la cares-src
           if [ ! -f cares-src/CMakeLists.txt ]; then
-            echo "ERROR: CMakeLists.txt not found"
+            echo "ERROR: cares-src/CMakeLists.txt not found"
             exit 1
           fi
 
