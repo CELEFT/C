@@ -205,7 +205,7 @@ jobs:
           path: ${{ env.PKG_NAME }}.tar.xz
           retention-days: 30
 
-  # ========== 第三步：发布（使用 gh CLI）==========
+  # ========== 第三步：发布（仅上传两个产物）==========
   release:
     runs-on: ubuntu-latest
     needs: [merge-expat, build-cares]
@@ -219,19 +219,21 @@ jobs:
         with:
           path: artifacts
 
-      - name: Collect packages
+      - name: Collect only final packages (Expat merged + c-ares)
         run: |
           mkdir release-pkgs
-          find artifacts -name "*.tar.xz" -exec cp {} release-pkgs/ \;
+          # 只复制 Expat 合并产物和 c-ares 产物，共两个
+          find artifacts -name "libexpat-android-*.tar.xz" -exec cp {} release-pkgs/ \;
+          find artifacts -name "libcares-android-*.tar.xz" -exec cp {} release-pkgs/ \;
 
       - name: Create Release and upload assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ env.RELEASE_TAG }}"
-          # 如果 release 已存在，先删除（避免冲突）
+          # 删除旧 release（若有），避免冲突
           gh release delete "$TAG" --repo "${{ github.repository }}" --yes || true
-          # 创建 release 并上传所有包
+          # 创建新 release 并上传所有包（此时 release-pkgs 只有两个文件）
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             --title "Android Libraries (Expat & c-ares)" \
