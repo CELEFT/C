@@ -40,7 +40,7 @@ jobs:
         id: set-ndk-path
         run: echo "ndk_path=${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_OUTPUT
 
-  # ========== 第二步：构建 Expat（矩阵：动态库 / 静态库）==========
+  # ========== 第二步：构建 Expat（矩阵：shared / static）==========
   build-expat:
     runs-on: ubuntu-latest
     needs: prepare
@@ -55,7 +55,6 @@ jobs:
           - lib_type: static
             shared_flag: OFF
             static_flag: ON
-      # 避免多个 abi 与 lib_type 组合爆炸，我们固定 abi 只有一个，目前仅 arm64-v8a
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -103,13 +102,13 @@ jobs:
           path: install-expat-${{ matrix.abi }}-${{ matrix.lib_type }}
           retention-days: 30
 
-  # ========== 合并 Expat 动态库和静态库产物 ==========
+  # ========== 合并 Expat 产物 ==========
   merge-expat:
     runs-on: ubuntu-latest
     needs: build-expat
     strategy:
       matrix:
-        abi: [arm64-v8a]   # 与 build-expat 保持一致的 abi
+        abi: [arm64-v8a]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -126,13 +125,9 @@ jobs:
           name: expat-static-${{ matrix.abi }}-${{ github.run_id }}
           path: install-static
 
-      - name: Merge (static into shared, replace duplicates)
+      - name: Merge (static into shared)
         run: |
-          # 将静态库的 lib 目录中的 .a 文件复制到共享目录的 lib 下
-          # 头文件等重复文件会被覆盖（但相同，无影响）
           cp -rf install-static/* install-shared/
-          # 现在 install-shared 包含 .so 和 .a
-          # 重命名合并后的目录为最终安装目录
           mv install-shared install-expat-merged
 
       - name: Package merged Expat
@@ -150,7 +145,7 @@ jobs:
           path: ${{ env.PKG_NAME }}.tar.xz
           retention-days: 30
 
-  # ========== 第二步：构建 c-ares（同时构建动静态）==========
+  # ========== 构建 c-ares ==========
   build-cares:
     runs-on: ubuntu-latest
     needs: prepare
@@ -222,19 +217,16 @@ jobs:
       - name: Download merged Expat artifact
         uses: actions/download-artifact@v4
         with:
-          name: expat-merged-${{ matrix.abi }}-${{ github.run_id }}
+          name: expat-merged-arm64-v8a-${{ github.run_id }}
           path: expat-artifact
-        env:
-          # 因为我们只有一个 abi，但 needs 中未定义 matrix，但直接指定具体名称也可行
-          # 这里使用通配符方式或直接指定完整名称
-          # 由于 github.run_id 是动态的，我们可以在后续步骤中查找
+
       - name: Download c-ares artifact
         uses: actions/download-artifact@v4
         with:
           name: cares-arm64-v8a-${{ github.run_id }}
           path: cares-artifact
 
-      - name: Collect all packages
+      - name: Collect packages
         run: |
           mkdir release-pkgs
           find expat-artifact -name "*.tar.xz" -exec cp {} release-pkgs/ \;
@@ -252,10 +244,9 @@ jobs:
             - 目标平台 ${{ env.ANDROID_PLATFORM }}
             - 构建系统：Ninja
             - ABI: arm64-v8a
-            - Expat 包含动态库 (.so) 和静态库 (.a)（通过矩阵分别构建后合并）
+            - Expat 包含动态库 (.so) 和静态库 (.a)（矩阵分别构建后合并）
             - c-ares 包含动态库 (.so) 和静态库 (.a)
-          files: |
-            release-pkgs/*.tar.xz
+          files: release-pkgs/*.tar.xz
           prerelease: false
           draft: false
           append_body: false
