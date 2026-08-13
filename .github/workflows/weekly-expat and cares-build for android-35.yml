@@ -6,12 +6,12 @@ on:
   workflow_dispatch:
 
 env:
-  NDK_VERSION: r30-beta2                     # 版本标识，用于缓存 key
+  NDK_VERSION: r30-beta2
   ANDROID_PLATFORM: android-35
   RELEASE_TAG: libexpat+libcares
 
 jobs:
-  # ==================== 第一步：配置环境 ====================
+  # ========== 第一步：环境准备 ==========
   prepare:
     runs-on: ubuntu-latest
     outputs:
@@ -27,11 +27,10 @@ jobs:
         id: cache-ndk
         uses: actions/cache@v4
         with:
-          # 缓存整个 NDK 解压目录
           path: ${{ runner.temp }}/ndk
           key: ndk-${{ env.NDK_VERSION }}-linux
 
-      - name: Download and setup Android NDK (if not cached)
+      - name: Download NDK (if not cached)
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip -O ndk.zip
@@ -39,10 +38,9 @@ jobs:
 
       - name: Set NDK path output
         id: set-ndk-path
-        run: |
-          echo "ndk_path=${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_OUTPUT
+        run: echo "ndk_path=${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_OUTPUT
 
-  # ==================== 第二步：构建 Expat ====================
+  # ========== 第二步：构建 Expat ==========
   build-expat:
     runs-on: ubuntu-latest
     needs: prepare
@@ -52,32 +50,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
-      # 恢复 NDK 缓存（与 prepare 使用相同 key）
-      - name: Restore Android NDK cache
+      - name: Restore NDK cache
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/ndk
           key: ndk-${{ env.NDK_VERSION }}-linux
 
       - name: Set NDK environment
-        run: |
-          echo "ANDROID_NDK_ROOT=${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+        run: echo "ANDROID_NDK_ROOT=${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
 
-      - name: Clone Expat (master)
+      - name: Clone Expat
         run: |
           git clone --depth 1 --branch master https://github.com/libexpat/libexpat.git expat-src
-          if [ ! -f expat-src/expat/CMakeLists.txt ]; then
-            echo "ERROR: expat-src/expat/CMakeLists.txt not found"
-            exit 1
-          fi
+          [ -f expat-src/expat/CMakeLists.txt ] || { echo "CMakeLists.txt missing"; exit 1; }
 
-      - name: Build and install Expat for ${{ matrix.abi }}
+      - name: Build and install Expat
         run: |
           cd expat-src/expat
           cmake -B ../../build-expat-${{ matrix.abi }} \
@@ -96,24 +87,22 @@ jobs:
           ninja -C ../../build-expat-${{ matrix.abi }}
           ninja -C ../../build-expat-${{ matrix.abi }} install
 
-      - name: Package Expat install directory
+      - name: Package Expat
         run: |
-          export BUILD_DATE=$(date +%Y%m%d)
-          export ABI="${{ matrix.abi }}"
-          export PKG_NAME="libexpat-android-35-${ABI}-${BUILD_DATE}"
-          mkdir -p "${PKG_NAME}"
-          cp -r install-expat-${ABI}/* "${PKG_NAME}/"
-          tar -c "${PKG_NAME}" | xz -9e -T0 -z > "${PKG_NAME}.tar.xz"
-          echo "PKG_NAME=$PKG_NAME" >> $GITHUB_ENV
+          export DATE=$(date +%Y%m%d)
+          export PKG="libexpat-android-35-${{ matrix.abi }}-${DATE}"
+          mkdir "${PKG}" && cp -r install-expat-${{ matrix.abi }}/* "${PKG}/"
+          tar -c "${PKG}" | xz -9e -T0 -z > "${PKG}.tar.xz"
+          echo "PKG_NAME=${PKG}" >> $GITHUB_ENV
 
-      - name: Upload Expat artifact (30 days)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: expat-${{ matrix.abi }}-${{ github.run_id }}
           path: ${{ env.PKG_NAME }}.tar.xz
           retention-days: 30
 
-  # ==================== 第二步：构建 c-ares ====================
+  # ========== 第二步：构建 c-ares ==========
   build-cares:
     runs-on: ubuntu-latest
     needs: prepare
@@ -123,31 +112,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
-      - name: Restore Android NDK cache
+      - name: Restore NDK cache
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/ndk
           key: ndk-${{ env.NDK_VERSION }}-linux
 
       - name: Set NDK environment
-        run: |
-          echo "ANDROID_NDK_ROOT=${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+        run: echo "ANDROID_NDK_ROOT=${{ runner.temp }}/ndk/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
 
-      - name: Clone c-ares (main)
+      - name: Clone c-ares
         run: |
           git clone --depth 1 --branch main https://github.com/c-ares/c-ares.git cares-src
-          if [ ! -f cares-src/CMakeLists.txt ]; then
-            echo "ERROR: cares-src/CMakeLists.txt not found"
-            exit 1
-          fi
+          [ -f cares-src/CMakeLists.txt ] || { echo "CMakeLists.txt missing"; exit 1; }
 
-      - name: Build and install c-ares for ${{ matrix.abi }}
+      - name: Build and install c-ares
         run: |
           cd cares-src
           cmake -B ../build-cares-${{ matrix.abi }} \
@@ -164,28 +147,26 @@ jobs:
           ninja -C ../build-cares-${{ matrix.abi }}
           ninja -C ../build-cares-${{ matrix.abi }} install
 
-      - name: Package c-ares install directory
+      - name: Package c-ares
         run: |
-          export BUILD_DATE=$(date +%Y%m%d)
-          export ABI="${{ matrix.abi }}"
-          export PKG_NAME="libcares-android-35-${ABI}-${BUILD_DATE}"
-          mkdir -p "${PKG_NAME}"
-          cp -r install-cares-${ABI}/* "${PKG_NAME}/"
-          tar -c "${PKG_NAME}" | xz -9e -T0 -z > "${PKG_NAME}.tar.xz"
-          echo "PKG_NAME=$PKG_NAME" >> $GITHUB_ENV
+          export DATE=$(date +%Y%m%d)
+          export PKG="libcares-android-35-${{ matrix.abi }}-${DATE}"
+          mkdir "${PKG}" && cp -r install-cares-${{ matrix.abi }}/* "${PKG}/"
+          tar -c "${PKG}" | xz -9e -T0 -z > "${PKG}.tar.xz"
+          echo "PKG_NAME=${PKG}" >> $GITHUB_ENV
 
-      - name: Upload c-ares artifact (30 days)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: cares-${{ matrix.abi }}-${{ github.run_id }}
           path: ${{ env.PKG_NAME }}.tar.xz
           retention-days: 30
 
-  # ==================== 第三步：发布 ====================
+  # ========== 第三步：发布 ==========
   release:
     runs-on: ubuntu-latest
     needs: [build-expat, build-cares]
-    if: success()   # 仅当两个构建都成功时运行
+    if: success()
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -195,11 +176,10 @@ jobs:
         with:
           path: artifacts
 
-      - name: Collect and move artifacts
-        run: |
-          find artifacts -name "*.tar.xz" -exec mv {} . \;
+      - name: Collect packages
+        run: find artifacts -name "*.tar.xz" -exec mv {} . \;
 
-      - name: Upload to Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
