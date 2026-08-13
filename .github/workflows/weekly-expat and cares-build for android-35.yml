@@ -23,6 +23,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ----- 安装 Ninja -----
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
       # ----- 下载 NDK r30 beta2 -----
       - name: Download and setup Android NDK r30 beta2
         run: |
@@ -30,20 +34,22 @@ jobs:
           unzip -q ndk.zip -d ${{ runner.temp }}/ndk
           echo "ANDROID_NDK_ROOT=${{ runner.temp }}/ndk/android-ndk-r30-beta2" >> $GITHUB_ENV
 
-      # ----- 克隆最新 Expat 源码（无缓存，每次最新）-----
+      # ----- 克隆最新 Expat 源码 -----
       - name: Clone Expat latest
         run: |
           git clone --depth 1 https://github.com/libexpat/libexpat.git expat-src
 
-      # ----- 克隆最新 c-ares 源码（无缓存，每次最新）-----
+      # ----- 克隆最新 c-ares 源码 -----
       - name: Clone c-ares latest
         run: |
           git clone --depth 1 https://github.com/c-ares/c-ares.git cares-src
 
-      # ----- 编译 Expat -----
+      # ----- 编译 Expat（使用 Ninja）-----
       - name: Build Expat for ${{ matrix.abi }}
         run: |
           cmake -S expat-src -B build-expat-${{ matrix.abi }} \
+            -G Ninja \
+            -DCMAKE_INSTALL_PREFIX=$PWD/install-expat-${{ matrix.abi }} \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=${{ env.ANDROID_PLATFORM }} \
@@ -53,12 +59,15 @@ jobs:
             -DBUILD_examples=OFF \
             -DBUILD_tests=OFF \
             -DBUILD_doc=OFF
-          cmake --build build-expat-${{ matrix.abi }} --config Release
+          ninja -C build-expat-${{ matrix.abi }}
+          ninja -C build-expat-${{ matrix.abi }} install
 
-      # ----- 编译 c-ares -----
+      # ----- 编译 c-ares（使用 Ninja）-----
       - name: Build c-ares for ${{ matrix.abi }}
         run: |
           cmake -S cares-src -B build-cares-${{ matrix.abi }} \
+            -G Ninja \
+            -DCMAKE_INSTALL_PREFIX=$PWD/install-cares-${{ matrix.abi }} \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=${{ env.ANDROID_PLATFORM }} \
@@ -67,35 +76,20 @@ jobs:
             -DCARES_SHARED=ON \
             -DCARES_BUILD_TOOLS=OFF \
             -DCARES_INSTALL=ON
-          cmake --build build-cares-${{ matrix.abi }} --config Release
+          ninja -C build-cares-${{ matrix.abi }}
+          ninja -C build-cares-${{ matrix.abi }} install
 
-      # ----- 打包（动态查找 .so，命名只含日期）-----
-      - name: Package libraries separately
+      # ----- 打包整个 install 目录（以日期命名）-----
+      - name: Package install directories
         run: |
           export BUILD_DATE=$(date +%Y%m%d)
           export ABI="${{ matrix.abi }}"
 
-          mkdir -p expat_pkg cares_pkg
+          # 打包 Expat 的 install 目录（包含 lib、include 等）
+          tar -c -C install-expat-${ABI} . | xz -9e -T0 -z > libexpat-android-35-${BUILD_DATE}.tar.xz
 
-          EXPAT_SO=$(find build-expat-${ABI} -name "libexpat.so" | head -n 1)
-          if [ -z "$EXPAT_SO" ]; then
-            echo "❌ libexpat.so not found"
-            ls -laR build-expat-${ABI}
-            exit 1
-          fi
-          cp "$EXPAT_SO" expat_pkg/
-
-          CARES_SO=$(find build-cares-${ABI} -name "libcares.so" | head -n 1)
-          if [ -z "$CARES_SO" ]; then
-            echo "❌ libcares.so not found"
-            ls -laR build-cares-${ABI}
-            exit 1
-          fi
-          cp "$CARES_SO" cares_pkg/
-
-          # 压缩包命名：库名-android-35-日期.tar.xz
-          (cd expat_pkg && tar -c libexpat.so) | xz -9e -T0 -z > libexpat-android-35-${BUILD_DATE}.tar.xz
-          (cd cares_pkg && tar -c libcares.so) | xz -9e -T0 -z > libcares-android-35-${BUILD_DATE}.tar.xz
+          # 打包 c-ares 的 install 目录
+          tar -c -C install-cares-${ABI} . | xz -9e -T0 -z > libcares-android-35-${BUILD_DATE}.tar.xz
 
       # ----- 上传 Artifact（保留 30 天）-----
       - name: Upload artifacts (30 days retention)
@@ -118,6 +112,7 @@ jobs:
             - 源码：最新 Expat (master) 和 c-ares (main)
             - NDK ${{ env.NDK_VERSION }}
             - 目标平台 ${{ env.ANDROID_PLATFORM }}
+            - 构建系统：Ninja
           files: |
             libexpat-android-35-*.tar.xz
             libcares-android-35-*.tar.xz
