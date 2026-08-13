@@ -51,10 +51,8 @@ jobs:
         include:
           - lib_type: shared
             shared_flag: ON
-            static_flag: OFF
           - lib_type: static
             shared_flag: OFF
-            static_flag: ON
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -86,12 +84,12 @@ jobs:
             -DANDROID_ABI=${{ matrix.abi }} \
             -DANDROID_PLATFORM=${{ env.ANDROID_PLATFORM }} \
             -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_shared=${{ matrix.shared_flag }} \
-            -DBUILD_static=${{ matrix.static_flag }} \
-            -DBUILD_tools=OFF \
-            -DBUILD_examples=OFF \
-            -DBUILD_tests=OFF \
-            -DBUILD_doc=OFF
+            -DEXPAT_SHARED_LIBS=${{ matrix.shared_flag }} \
+            -DEXPAT_BUILD_TOOLS=OFF \
+            -DEXPAT_BUILD_EXAMPLES=OFF \
+            -DEXPAT_BUILD_TESTS=OFF \
+            -DEXPAT_BUILD_DOCS=OFF \
+            -DEXPAT_BUILD_FUZZERS=OFF
           ninja -C ../../build-expat-${{ matrix.abi }}-${{ matrix.lib_type }}
           ninja -C ../../build-expat-${{ matrix.abi }}-${{ matrix.lib_type }} install
 
@@ -222,7 +220,6 @@ jobs:
       - name: Collect only final packages (Expat merged + c-ares)
         run: |
           mkdir release-pkgs
-          # 只复制 Expat 合并产物和 c-ares 产物，共两个
           find artifacts -name "libexpat-android-*.tar.xz" -exec cp {} release-pkgs/ \;
           find artifacts -name "libcares-android-*.tar.xz" -exec cp {} release-pkgs/ \;
 
@@ -231,9 +228,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ env.RELEASE_TAG }}"
-          # 删除旧 release（若有），避免冲突
           gh release delete "$TAG" --repo "${{ github.repository }}" --yes || true
-          # 创建新 release 并上传所有包（此时 release-pkgs 只有两个文件）
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             --title "Android Libraries (Expat & c-ares)" \
