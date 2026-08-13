@@ -23,28 +23,33 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ----- 安装 Ninja -----
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
-      # ----- 下载 NDK r30 beta2 -----
       - name: Download and setup Android NDK r30 beta2
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r30-beta2-linux.zip?hl=zh-cn -O ndk.zip
           unzip -q ndk.zip -d ${{ runner.temp }}/ndk
           echo "ANDROID_NDK_ROOT=${{ runner.temp }}/ndk/android-ndk-r30-beta2" >> $GITHUB_ENV
 
-      # ----- 克隆最新 Expat 源码 -----
       - name: Clone Expat latest
         run: |
-          git clone --depth 1 https://github.com/libexpat/libexpat.git expat-src
+          git clone --depth 1 --branch master https://github.com/libexpat/libexpat.git expat-src
+          ls -la expat-src
+          if [ ! -f expat-src/CMakeLists.txt ]; then
+            echo "ERROR: CMakeLists.txt not found in expat-src"
+            exit 1
+          fi
 
-      # ----- 克隆最新 c-ares 源码 -----
       - name: Clone c-ares latest
         run: |
-          git clone --depth 1 https://github.com/c-ares/c-ares.git cares-src
+          git clone --depth 1 --branch main https://github.com/c-ares/c-ares.git cares-src
+          ls -la cares-src
+          if [ ! -f cares-src/CMakeLists.txt ]; then
+            echo "ERROR: CMakeLists.txt not found in cares-src"
+            exit 1
+          fi
 
-      # ----- 编译 Expat（使用 Ninja）-----
       - name: Build Expat for ${{ matrix.abi }}
         run: |
           cmake -S expat-src -B build-expat-${{ matrix.abi }} \
@@ -62,7 +67,6 @@ jobs:
           ninja -C build-expat-${{ matrix.abi }}
           ninja -C build-expat-${{ matrix.abi }} install
 
-      # ----- 编译 c-ares（使用 Ninja）-----
       - name: Build c-ares for ${{ matrix.abi }}
         run: |
           cmake -S cares-src -B build-cares-${{ matrix.abi }} \
@@ -79,40 +83,35 @@ jobs:
           ninja -C build-cares-${{ matrix.abi }}
           ninja -C build-cares-${{ matrix.abi }} install
 
-      # ----- 打包整个 install 目录（以日期命名）-----
+      # ----- 打包（文件名包含 ABI，与文件夹对应）-----
       - name: Package install directories
         run: |
           export BUILD_DATE=$(date +%Y%m%d)
           export ABI="${{ matrix.abi }}"
+          tar -c -C install-expat-${ABI} . | xz -9e -T0 -z > libexpat-android-35-${ABI}-${BUILD_DATE}.tar.xz
+          tar -c -C install-cares-${ABI} . | xz -9e -T0 -z > libcares-android-35-${ABI}-${BUILD_DATE}.tar.xz
 
-          # 打包 Expat 的 install 目录（包含 lib、include 等）
-          tar -c -C install-expat-${ABI} . | xz -9e -T0 -z > libexpat-android-35-${BUILD_DATE}.tar.xz
-
-          # 打包 c-ares 的 install 目录
-          tar -c -C install-cares-${ABI} . | xz -9e -T0 -z > libcares-android-35-${BUILD_DATE}.tar.xz
-
-      # ----- 上传 Artifact（保留 30 天）-----
       - name: Upload artifacts (30 days retention)
         uses: actions/upload-artifact@v4
         with:
-          name: libs-arm64-v8a-${{ github.run_id }}
+          name: libs-${{ matrix.abi }}-${{ github.run_id }}
           path: |
             libexpat-android-35-*.tar.xz
             libcares-android-35-*.tar.xz
           retention-days: 30
 
-      # ----- 推送到 Release -----
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: "Weekly Android Libraries (arm64-v8a)"
+          name: "Weekly Android Libraries (${{ matrix.abi }})"
           body: |
             ##### 自动构建于 $(date -u +'%Y-%m-%d %H:%M UTC')
             - 源码：最新 Expat (master) 和 c-ares (main)
             - NDK ${{ env.NDK_VERSION }}
             - 目标平台 ${{ env.ANDROID_PLATFORM }}
             - 构建系统：Ninja
+            - ABI: ${{ matrix.abi }}
           files: |
             libexpat-android-35-*.tar.xz
             libcares-android-35-*.tar.xz
