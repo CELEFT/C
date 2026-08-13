@@ -8,7 +8,7 @@ on:
 env:
   NDK_VERSION: 30.0.15729638-beta2
   ANDROID_PLATFORM: android-35
-  RELEASE_TAG: weekly-build
+  RELEASE_TAG: libexpat+libcares   # 修改 tag
 
 jobs:
   build-expat:
@@ -34,7 +34,6 @@ jobs:
       - name: Clone Expat (master)
         run: |
           git clone --depth 1 --branch master https://github.com/libexpat/libexpat.git expat-src
-          # Expat 的 CMakeLists.txt 在 expat/ 子目录下
           if [ ! -f expat-src/expat/CMakeLists.txt ]; then
             echo "ERROR: expat-src/expat/CMakeLists.txt not found"
             exit 1
@@ -62,6 +61,7 @@ jobs:
         run: |
           export BUILD_DATE=$(date +%Y%m%d)
           export ABI="${{ matrix.abi }}"
+          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
           tar -c -C install-expat-${ABI} . | xz -9e -T0 -z > libexpat-android-35-${ABI}-${BUILD_DATE}.tar.xz
 
       - name: Upload Expat artifact (30 days)
@@ -75,18 +75,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: "Weekly Android Libraries (Expat & c-ares)"
+          name: "Android Libraries (Expat & c-ares) - ${{ env.BUILD_DATE }}"
           body: |
-            ##### 自动构建于 $(date -u +'%Y-%m-%d %H:%M UTC')
-            - Expat (master), c-ares (main)
+            ##### 构建日期：${{ env.BUILD_DATE }}
+            - 源码：Expat (master) 和 c-ares (main)
             - NDK ${{ env.NDK_VERSION }}
             - 目标平台 ${{ env.ANDROID_PLATFORM }}
             - 构建系统：Ninja
+            - ABI: ${{ matrix.abi }}
           files: libexpat-android-35-*.tar.xz
           prerelease: false
           draft: false
-          append_body: true
-          force: false
+          append_body: false
+          overwrite_files: true   # 覆盖已存在的同名文件
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -139,6 +140,7 @@ jobs:
         run: |
           export BUILD_DATE=$(date +%Y%m%d)
           export ABI="${{ matrix.abi }}"
+          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
           tar -c -C install-cares-${ABI} . | xz -9e -T0 -z > libcares-android-35-${ABI}-${BUILD_DATE}.tar.xz
 
       - name: Upload c-ares artifact (30 days)
@@ -152,17 +154,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: "Weekly Android Libraries (Expat & c-ares)"
+          name: "Android Libraries (Expat & c-ares) - ${{ env.BUILD_DATE }}"
           body: |
-            ##### 自动构建于 $(date -u +'%Y-%m-%d %H:%M UTC')
-            - Expat (master), c-ares (main)
+            ##### 构建日期：${{ env.BUILD_DATE }}
+            - 源码：Expat (master) 和 c-ares (main)
             - NDK ${{ env.NDK_VERSION }}
             - 目标平台 ${{ env.ANDROID_PLATFORM }}
             - 构建系统：Ninja
+            - ABI: ${{ matrix.abi }}
           files: libcares-android-35-*.tar.xz
           prerelease: false
           draft: false
-          append_body: true
-          force: false
+          append_body: false
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
