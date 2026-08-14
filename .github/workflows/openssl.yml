@@ -1,8 +1,8 @@
-name: OpenSSL Android 每日构建
+name: OpenSSL Android 每周构建
 
 on:
   schedule:
-    - cron: '0 2 * * *'   # 每天 UTC 02:00 = 北京时间 10:00
+    - cron: '0 2 * * 6'   # 每周六 UTC 02:00 = 北京时间 10:00
   workflow_dispatch:
     inputs:
       version:
@@ -22,6 +22,7 @@ env:
   API_LEVEL: '35'
   ABI:       arm64-v8a
   OPENSSL_TARGET: android-arm64
+  TAG_NAME:  android-openssl-latest       # 固定 tag，每次覆盖
 
 jobs:
   generate-matrix:
@@ -49,7 +50,7 @@ jobs:
         version: ${{ fromJson(needs.generate-matrix.outputs.versions) }}
 
     steps:
-      # ---------- NDK ----------
+      # ========== NDK ==========
       - name: 缓存 NDK
         id: ndk-cache
         uses: actions/cache@v4
@@ -65,10 +66,6 @@ jobs:
           unzip -q "$NDK_ZIP"
           rm -f "$NDK_ZIP"
 
-      # ========== 关键修复点 ==========
-      # OpenSSL 的 Configure 除了 ANDROID_NDK_ROOT，
-      # 还必须在 $PATH 中找到 NDK 的 LLVM 工具链（否则报
-      # "no NDK aarch64-linux-android-gcc on $PATH"）
       - name: 设置 NDK 环境变量（含 PATH）
         run: |
           echo "ANDROID_NDK_ROOT=$GITHUB_WORKSPACE/$NDK_DIR" >> "$GITHUB_ENV"
@@ -82,7 +79,7 @@ jobs:
           ls "$NDK_BIN" | head -20
           command -v aarch64-linux-android${API_LEVEL}-clang && echo "✅ clang 可用"
 
-      # ---------- 获取 OpenSSL 源码 ----------
+      # ========== 获取 OpenSSL 源码 ==========
       - name: 拉取 OpenSSL master（最新）
         if: matrix.version == 'master'
         uses: actions/checkout@v4
@@ -99,8 +96,7 @@ jobs:
           tar xzf openssl-3.5.7.tar.gz
           mv openssl-3.5.7 openssl
 
-      # ---------- 配置与编译 ----------
-      # shared 模式同时产出 .a 静态库和 .so 动态库
+      # ========== 配置与编译 ==========
       - name: 配置（shared：静态库 + 动态库）
         working-directory: openssl
         run: |
@@ -117,7 +113,7 @@ jobs:
           make -j"$(nproc)"
           make install_sw
 
-      # ---------- 校验产物 ----------
+      # ========== 校验产物 ==========
       - name: 校验静态库与动态库
         run: |
           echo "=== 静态库 (.a) ==="
@@ -137,13 +133,43 @@ jobs:
             > "$GITHUB_WORKSPACE/dist/${{ matrix.version }}/$ABI/VERSION.txt"
           cat "$GITHUB_WORKSPACE/dist/${{ matrix.version }}/$ABI/VERSION.txt"
 
-      # ---------- 打包上传 ----------
+      # ========== 打包（文件夹名 = 文件名）==========
       - name: 打包
-        working-directory: dist
         run: |
-          tar czf "openssl-android-$ABI-api$API_LEVEL-${{ matrix.version }}.tar.gz" \
-            "${{ matrix.version }}"
-          ls -lh
+          # 构造最终文件夹名（与 .tar.gz 同名，不含后缀）
+          PKG_NAME="openssl-android-${ABI}-api${API_LEVEL}-${{ matrix.version }}"
+          PKG_DIR="staging/${PKG_NAME}"
+
+          mkdir -p "${PKG_DIR}/lib" "${PKG_DIR}/include"
+
+          # 复制产物到 staging 目录
+          cp dist/${{ matrix.version }}/$ABI/lib/*.a   "${PKG_DIR}/lib/"
+          cp dist/${{ matrix.version }}/$ABI/lib/*.so* "${PKG_DIR}/lib/"
+          cp -r dist/${{ matrix.version }}/$ABI/include/* "${PKG_DIR}/include/"
+          cp dist/${{ matrix.version }}/$ABI/VERSION.txt "${PKG_DIR}/"
+
+          # 从 staging 的父目录打包，确保解压后首层就是 PKG_NAME
+          cd staging
+          tar czf "../dist/${PKG_NAME}.tar.gz" "${PKG_NAME}"
+          cd ..
+
+          echo "=== 产物 ==="
+          ls -lh dist/*.tar.gz
+
+          # 验证：解压后结构正确
+          mkdir -p verify && cd verify
+          tar xzf "../dist/${PKG_NAME}.tar.gz"
+          echo "--- 解压验证 ---"
+          find "${PKG_NAME}" -type f | sort
+          test -f "${PKG_NAME}/lib/libcrypto.a"
+          test -f "${PKG_NAME}/lib/libcrypto.so"
+          test -f "${PKG_NAME}/lib/libssl.a"
+          test -f "${PKG_NAME}/lib/libssl.so"
+          test -f "${PKG_NAME}/include/openssl/opensslv.h"
+          test -f "${PKG_NAME}/VERSION.txt"
+          echo "✅ 打包结构正确"
+          cd ..
+          rm -rf verify
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
@@ -151,3 +177,96 @@ jobs:
           name: openssl-android-${{ matrix.version }}-${{ env.ABI }}-api${{ env.API_LEVEL }}
           path: dist/openssl-android-${{ env.ABI }}-api${{ env.API_LEVEL }}-${{ matrix.version }}.tar.gz
           retention-days: 30
+
+  # ========== 发布 Release ==========
+  release:
+    name: 发布 Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write                       # 需要写权限来创建/删除 tag & release
+
+    steps:
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 列出产物
+        run: find artifacts -type f | sort
+
+      - name: 组装 Release Body
+        run: |
+          BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # 收集版本信息
+          VERSION_INFO=""
+          for f in artifacts/*/VERSION.txt; do
+            if [ -f "$f" ]; then
+              VER=$(cat "$f")
+              DIR=$(dirname "$f")
+              VER_NAME=$(basename "$DIR")
+              VERSION_INFO="${VERSION_INFO}### ${VER_NAME}\n\`${VER}\`\n\n"
+            fi
+          done
+
+          cat > release_body.md << 'BEOF'
+          ## OpenSSL Android 构建产物
+
+          **构建日期：** {{DATE}}
+
+          ---
+
+          {{VERSIONS}}
+
+          ### 包含内容
+
+          | 文件 | 说明 |
+          |------|------|
+          | `openssl-android-arm64-v8a-api35-master.tar.gz` | OpenSSL master / arm64-v8a / API 35 |
+          | `openssl-android-arm64-v8a-api35-3.5.7.tar.gz` | OpenSSL 3.5.7 / arm64-v8a / API 35 |
+
+          每个包内包含：
+
+          - `lib/libcrypto.a` — 静态库
+          - `lib/libssl.a` — 静态库
+          - `lib/libcrypto.so` — 动态库
+          - `lib/libssl.so` — 动态库
+          - `include/` — 头文件
+          - `VERSION.txt` — 版本信息
+
+          ---
+
+          > 🔄 此 Release 每周六自动构建并覆盖更新
+          > 📦 [查看工作流运行详情]({{RUN_URL}})
+          BEOF
+
+          # 替换占位符
+          sed -i "s|{{DATE}}|${BUILD_DATE}|g" release_body.md
+          sed -i "s|{{RUN_URL}}|${RUN_URL}|g" release_body.md
+          # 版本信息需要特殊处理（保留换行）
+          VERSIONS_ESCAPED=$(echo -e "${VERSION_INFO}")
+          sed -i "/{{VERSIONS}}/c\\${VERSIONS_ESCAPED}" release_body.md
+
+          cat release_body.md
+
+      - name: 删除旧 Release 和 Tag（覆盖）
+        run: |
+          gh release delete "${{ env.TAG_NAME }}" --yes --cleanup-tag 2>/dev/null || true
+          echo "✅ 旧 Release/Tag 已清理"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 发布新 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: "OpenSSL Android Weekly Build"
+          body_path: release_body.md
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/**/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
