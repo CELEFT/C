@@ -33,9 +33,11 @@ jobs:
 
       - name: Create build directories
         run: |
-          mkdir -p deps install
+          mkdir -p deps install deps-shared install-shared
           echo "DEPS_DIR=${{ github.workspace }}/deps" >> $GITHUB_ENV
           echo "INSTALL_DIR=${{ github.workspace }}/install" >> $GITHUB_ENV
+          echo "DEPS_SHARED_DIR=${{ github.workspace }}/deps-shared" >> $GITHUB_ENV
+          echo "INSTALL_SHARED_DIR=${{ github.workspace }}/install-shared" >> $GITHUB_ENV
 
       - name: Clone latest sources
         run: |
@@ -58,14 +60,23 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_INSTALL_PREFIX=$DEPS_DIR" >> $GITHUB_ENV
 
-      - name: Build zlib
+      - name: Build zlib (static)
         run: |
           cd src/zlib
           cmake -B build $CMAKE_ARGS
           cmake --build build --parallel
           cmake --install build
 
-      - name: Build XZ Utils
+      - name: Build zlib (shared)
+        run: |
+          cd src/zlib
+          cmake -B build-shared $CMAKE_ARGS \
+            -DCMAKE_INSTALL_PREFIX=$DEPS_SHARED_DIR \
+            -DBUILD_SHARED_LIBS=ON
+          cmake --build build-shared --parallel
+          cmake --install build-shared
+
+      - name: Build XZ Utils (static)
         run: |
           cd src/xz
           cmake -B build $CMAKE_ARGS \
@@ -74,7 +85,18 @@ jobs:
           cmake --build build --parallel
           cmake --install build
 
-      - name: Build Zstandard
+      - name: Build XZ Utils (shared)
+        run: |
+          cd src/xz
+          cmake -B build-shared $CMAKE_ARGS \
+            -DCMAKE_INSTALL_PREFIX=$DEPS_SHARED_DIR \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_TESTING=OFF \
+            -DXZ_UTILS=OFF
+          cmake --build build-shared --parallel
+          cmake --install build-shared
+
+      - name: Build Zstandard (static)
         run: |
           cd src/zstd/build/cmake
           cmake -B build $CMAKE_ARGS \
@@ -86,7 +108,20 @@ jobs:
           cmake --build build --parallel
           cmake --install build
 
-      - name: Build Bzip2
+      - name: Build Zstandard (shared)
+        run: |
+          cd src/zstd/build/cmake
+          cmake -B build-shared $CMAKE_ARGS \
+            -DCMAKE_INSTALL_PREFIX=$DEPS_SHARED_DIR \
+            -DZSTD_BUILD_PROGRAMS=OFF \
+            -DZSTD_BUILD_SHARED=ON \
+            -DZSTD_BUILD_STATIC=OFF \
+            -DZSTD_BUILD_CONTRIB=OFF \
+            -DZSTD_BUILD_TESTS=OFF
+          cmake --build build-shared --parallel
+          cmake --install build-shared
+
+      - name: Build Bzip2 (static)
         run: |
           cd src/bzip2
           # 生成 bz_version.h
@@ -110,7 +145,27 @@ jobs:
           cmake --build build --parallel
           cmake --install build
 
-      - name: Build LZ4
+      - name: Build Bzip2 (shared)
+        run: |
+          cd src/bzip2
+          # 覆盖为生成 SHARED 库的 CMakeLists（Android 下不设置 VERSION/SOVERSION，直接得到 libbz2.so）
+          printf '%s\n' \
+            'cmake_minimum_required(VERSION 3.15)' \
+            'project(bzip2 C)' \
+            'add_library(bz2 SHARED blocksort.c huffman.c crctable.c randtable.c compress.c decompress.c bzlib.c)' \
+            'target_compile_definitions(bz2 PRIVATE BZ_UNIX _FILE_OFFSET_BITS=64)' \
+            'set_target_properties(bz2 PROPERTIES OUTPUT_NAME bz2)' \
+            'target_include_directories(bz2 PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)' \
+            'install(TARGETS bz2 LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)' \
+            'install(FILES bzlib.h DESTINATION include)' \
+            > CMakeLists.txt
+          cmake -B build-shared $CMAKE_ARGS \
+            -DCMAKE_INSTALL_PREFIX=$DEPS_SHARED_DIR \
+            -DBUILD_SHARED_LIBS=ON
+          cmake --build build-shared --parallel
+          cmake --install build-shared
+
+      - name: Build LZ4 (static)
         run: |
           cd src/lz4/build/cmake
           cmake -B build $CMAKE_ARGS \
@@ -120,7 +175,20 @@ jobs:
           cmake --build build --parallel
           cmake --install build
 
-      - name: Build libarchive
+      - name: Build LZ4 (shared)
+        run: |
+          cd src/lz4/build/cmake
+          cmake -B build-shared $CMAKE_ARGS \
+            -DCMAKE_INSTALL_PREFIX=$DEPS_SHARED_DIR \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_STATIC_LIBS=OFF \
+            -DLZ4_BUILD_CLI=OFF \
+            -DLZ4_BUILD_LEGACY_LZ4C=OFF \
+            -DLZ4_POSITION_INDEPENDENT_LIB=ON
+          cmake --build build-shared --parallel
+          cmake --install build-shared
+
+      - name: Build libarchive (static)
         run: |
           cd src/libarchive
           cmake -B build -G Ninja \
@@ -144,22 +212,51 @@ jobs:
           cmake --build build --parallel
           cmake --install build
 
-      # ----- 新增：打包所有静态库和头文件 -----
+      - name: Build libarchive (shared)
+        run: |
+          cd src/libarchive
+          cmake -B build-shared -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$NDK_ROOT/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=$TARGET_ARCH \
+            -DANDROID_PLATFORM=android-$API_LEVEL \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_INSTALL_PREFIX=$INSTALL_SHARED_DIR \
+            -DCMAKE_PREFIX_PATH="$DEPS_SHARED_DIR" \
+            -DCMAKE_FIND_ROOT_PATH="$DEPS_SHARED_DIR" \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
+            -DENABLE_TEST=OFF \
+            -DENABLE_TAR=OFF \
+            -DENABLE_CPIO=OFF \
+            -DENABLE_CAT=OFF \
+            -DENABLE_WERROR=OFF
+          cmake --build build-shared --parallel
+          cmake --install build-shared
+
+      # ----- 打包：静态库（.a）+ 动态库（.so）+ 头文件 -----
       - name: Package artifacts
         run: |
           mkdir -p package/lib package/include
-          # 复制所有静态库（来自依赖和 libarchive）
+          # 静态库（来自静态依赖和静态 libarchive）
           find $DEPS_DIR/lib -name "*.a" -exec cp {} package/lib/ \;
           find $INSTALL_DIR/lib -name "*.a" -exec cp {} package/lib/ \;
-          # 复制所有头文件（保留子目录结构）
+          # 动态库（来自动态依赖和动态 libarchive）
+          find $DEPS_SHARED_DIR/lib -name "*.so" -exec cp {} package/lib/ \;
+          find $INSTALL_SHARED_DIR/lib -name "*.so" -exec cp {} package/lib/ \;
+          # 头文件（保留子目录结构）
           cp -r $DEPS_DIR/include/* package/include/ 2>/dev/null || true
           cp -r $INSTALL_DIR/include/* package/include/ 2>/dev/null || true
+          cp -r $DEPS_SHARED_DIR/include/* package/include/ 2>/dev/null || true
+          cp -r $INSTALL_SHARED_DIR/include/* package/include/ 2>/dev/null || true
           # 创建压缩包
-          tar -czf libarchive-android-${{ env.TARGET_ARCH }}-api${{ env.API_LEVEL }}.tar.gz -C package .
+          tar -czf libarchive-android-${{ env.TARGET_ARCH }}-api${{ env.API_LEVEL }}-static-shared.tar.gz -C package .
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: libarchive-android-${{ env.TARGET_ARCH }}-api${{ env.API_LEVEL }}
-          path: libarchive-android-${{ env.TARGET_ARCH }}-api${{ env.API_LEVEL }}.tar.gz
+          name: libarchive-android-${{ env.TARGET_ARCH }}-api${{ env.API_LEVEL }}-static-shared
+          path: libarchive-android-${{ env.TARGET_ARCH }}-api${{ env.API_LEVEL }}-static-shared.tar.gz
           retention-days: 180
