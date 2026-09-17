@@ -1,0 +1,61 @@
+name: Runner Info to TXT
+
+on:
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 采集信息并写入 runner-log.txt
+        run: |
+          LOG=runner-log.txt
+          {
+            echo "========== 采集时间 =========="
+            date -u
+            echo
+
+            echo "========== 系统信息 =========="
+            uname -a
+            cat /etc/os-release
+            echo
+
+            echo "========== CPU 核心数 =========="
+            nproc
+            echo
+
+            echo "========== CPU 详情 =========="
+            lscpu | grep -E 'Model name|^CPU\(s\)|Thread|Core|Socket|MHz' || true
+            echo
+
+            echo "========== 内存 =========="
+            free -h
+            echo
+
+            echo "========== 磁盘 =========="
+            df -h /
+            echo
+
+            echo "========== FFmpeg 版本 =========="
+            if command -v ffmpeg >/dev/null 2>&1; then
+              ffmpeg -version | head -n 3
+            else
+              echo "FFmpeg 未安装"
+            fi
+            echo
+
+            echo "========== Git 版本 =========="
+            git --version
+            echo
+
+            echo "========== 环境变量(节选) =========="
+            env | grep -E '^(RUNNER_|GITHUB_|CI=|HOME=)' | sort
+          } | tee "$LOG"
+
+      - name: 上传 runner-log.txt
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-log
+          path: runner-log.txt
+          if-no-files-found: error
