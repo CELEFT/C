@@ -13,13 +13,6 @@ MSVBCRT.AIO    https://www.ghxi.com/yxkhj.html
 
 
 
-
-收款码
-![截图](./IMG_20260603_224102.png)
-![截图](./IMG_20260603_224300.jpg)
-
-
-
 Qrcode 3694039797
 
 
