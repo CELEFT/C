@@ -132,34 +132,80 @@
   }
   .bg-btn:hover{background:rgba(36,40,50,.95)}
 
+  /* ---- 图片放大查看器 ---- */
   .lightbox {
     position: fixed; inset: 0; z-index: 100;
     background: rgba(0,0,0,.94);
     display: flex; align-items: center; justify-content: center;
     touch-action: none;
+    user-select: none;
   }
   .lightbox[hidden] { display: none; }
+
+  /* 图片容器：可拖动 */
+  .lb-stage{
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+    cursor: grab;
+  }
+  .lb-stage.dragging{ cursor: grabbing; }
+
   .lightbox img {
     max-width: 96vw; max-height: 92vh;
     width: auto; height: auto;
     transform-origin: center center;
     transition: transform .12s ease;
     user-select: none; -webkit-user-drag: none;
-    cursor: grab;
+    pointer-events: none;
   }
-  .lightbox img:active { cursor: grabbing; }
+
+  /* 右上角 X */
+  .lb-close {
+    position: absolute;
+    top: 16px; right: 16px;
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    border: 0;
+    background: rgba(255,255,255,.18);
+    color: #fff;
+    font-size: 24px; line-height: 1;
+    backdrop-filter: blur(6px);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10;
+    transition: background .15s;
+  }
+  .lb-close:hover { background: rgba(255,255,255,.32); }
+  .lb-close:active { transform: scale(.94); }
+
+  /* 底部工具栏 */
   .lb-toolbar {
     position: absolute; bottom: 22px; left: 50%;
     transform: translateX(-50%);
     display: flex; gap: 10px;
+    z-index: 10;
   }
   .lb-toolbar button {
     width: 46px; height: 46px; border-radius: 50%;
     border: 0; background: rgba(255,255,255,.16);
     color: #fff; font-size: 22px; line-height: 1;
     backdrop-filter: blur(6px); cursor: pointer;
+    transition: background .15s, transform .1s;
   }
-  .lb-toolbar button:active { background: rgba(255,255,255,.3); }
+  .lb-toolbar button:hover { background: rgba(255,255,255,.3); }
+  .lb-toolbar button:active { transform: scale(.92); }
+
+  /* 桌面端提示 */
+  .lb-tip{
+    position: absolute; top: 22px; left: 22px;
+    font-size: 12px; color: rgba(255,255,255,.5);
+    background: rgba(0,0,0,.4);
+    padding: 6px 12px; border-radius: 999px;
+    backdrop-filter: blur(6px);
+    z-index: 10;
+  }
+  @media (max-width: 720px){ .lb-tip{ display: none; } }
 </style>
 </head>
 <body>
@@ -232,8 +278,13 @@
 
 <button class="bg-btn" id="bgBtn">换背景</button>
 
+<!-- 放大查看器 -->
 <div class="lightbox" id="lightbox" hidden>
-  <img id="lightboxImg" alt="收款码">
+  <div class="lb-tip" id="lbTip">滚轮缩放 · 拖动平移 · 双击复位 · Esc 关闭</div>
+  <button class="lb-close" id="lbCloseTop" title="关闭">✕</button>
+  <div class="lb-stage" id="lbStage">
+    <img id="lightboxImg" alt="收款码">
+  </div>
   <div class="lb-toolbar">
     <button id="lbZoomIn" title="放大">＋</button>
     <button id="lbZoomOut" title="缩小">－</button>
@@ -284,14 +335,12 @@ function b64ToBytes(b64){
   return out;
 }
 
-/* 口令别名：djrisgay 与 丁嘉睿是gay 等价 */
 function normalizePwd(raw){
   const s = raw.trim();
   if (s.toLowerCase() === 'djrisgay') return '丁嘉睿是gay';
   return s;
 }
 
-/* 口令 → 真密钥（SHA-256, UTF-8） */
 async function fetchRealKey(pwd){
   const res = await fetch(KEY_FILE, { cache:'no-cache' });
   if (!res.ok) throw new Error('拉取 key.enc 失败');
@@ -305,13 +354,11 @@ async function fetchRealKey(pwd){
   return new TextDecoder().decode(plain);
 }
 
-/* 真密钥 → SHA-512 → 前 32 字节 */
 async function deriveImageKey(realKey){
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-512', new TextEncoder().encode(realKey)));
   return hash.slice(0, 32);
 }
 
-/* 拉取并解密图片 → dataURL */
 async function fetchImage(url, imageKey){
   const res = await fetch(url, { cache:'no-cache' });
   if (!res.ok) throw new Error('文件不存在: ' + url);
@@ -325,50 +372,116 @@ async function fetchImage(url, imageKey){
 }
 
 /* ========== 放大查看器 ========== */
-const lightbox = $('lightbox');
+const lightbox   = $('lightbox');
 const lightboxImg = $('lightboxImg');
+const lbStage    = $('lbStage');
+
 let lbScale = 1, lbX = 0, lbY = 0;
 let lbDragging = false, lbStartX = 0, lbStartY = 0;
+let lbMoved = false;   // 判断是拖动还是点击
 
-function updateLightbox() {
-  lightboxImg.style.transform = `translate(${lbX}px, ${lbY}px) scale(${lbScale})`;
+function clampScale(s){ return Math.max(0.3, Math.min(s, 8)); }
+
+function updateLightbox(){
+  lightboxImg.style.transform =
+    `translate(${lbX}px, ${lbY}px) scale(${lbScale})`;
 }
-function openLightbox(src) {
-  lightboxImg.src = src;
+
+function resetView(){
   lbScale = 1; lbX = 0; lbY = 0;
   updateLightbox();
+}
+
+function openLightbox(src){
+  lightboxImg.src = src;
+  resetView();
   lightbox.hidden = false;
   document.body.style.overflow = 'hidden';
+
   lightboxImg.onload = () => {
-    const vw = window.innerWidth * 0.9;
+    // 自动适配屏幕（小图放大，大图收缩）
+    const vw = window.innerWidth  * 0.9;
     const vh = window.innerHeight * 0.85;
     const fit = Math.min(vw / lightboxImg.naturalWidth, vh / lightboxImg.naturalHeight);
     lbScale = Math.max(1, Math.min(fit, 3));
     updateLightbox();
   };
 }
-function closeLightbox() {
+
+function closeLightbox(){
   lightbox.hidden = true;
   document.body.style.overflow = '';
 }
-$('lbZoomIn').onclick = () => { lbScale = Math.min(lbScale * 1.25, 6); updateLightbox(); };
-$('lbZoomOut').onclick = () => { lbScale = Math.max(lbScale / 1.25, 0.5); updateLightbox(); };
-$('lbReset').onclick = () => { lbScale = 1; lbX = 0; lbY = 0; updateLightbox(); };
-$('lbClose').onclick = closeLightbox;
-lightboxImg.addEventListener('pointerdown', e => {
+
+/* 按钮 */
+$('lbZoomIn').onclick  = () => { lbScale = clampScale(lbScale * 1.25); updateLightbox(); };
+$('lbZoomOut').onclick = () => { lbScale = clampScale(lbScale / 1.25); updateLightbox(); };
+$('lbReset').onclick   = resetView;
+$('lbClose').onclick   = closeLightbox;
+$('lbCloseTop').onclick = closeLightbox;
+
+/* 点击遮罩空白关闭（但不影响图片/按钮） */
+lightbox.addEventListener('click', e => {
+  if (e.target === lightbox || e.target === lbStage) {
+    if (!lbMoved) closeLightbox();
+  }
+});
+
+/* 桌面端：滚轮缩放 */
+lbStage.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  lbScale = clampScale(lbScale * factor);
+  updateLightbox();
+}, { passive: false });
+
+/* 桌面端：双击复位 / 再双击放大到 2x */
+lbStage.addEventListener('dblclick', e => {
+  e.preventDefault();
+  if (lbScale === 1 && lbX === 0 && lbY === 0) {
+    lbScale = 2;
+    updateLightbox();
+  } else {
+    resetView();
+  }
+});
+
+/* 桌面端：键盘 */
+document.addEventListener('keydown', e => {
+  if (lightbox.hidden) return;
+  if (e.key === 'Escape') { closeLightbox(); return; }
+  if (e.key === '+' || e.key === '=') { lbScale = clampScale(lbScale * 1.2); updateLightbox(); }
+  if (e.key === '-' || e.key === '_') { lbScale = clampScale(lbScale / 1.2); updateLightbox(); }
+  if (e.key === '0') { resetView(); }
+});
+
+/* 拖动（鼠标 + 触摸统一） */
+lbStage.addEventListener('pointerdown', e => {
+  if (e.target.closest('button')) return;      // 点在按钮上不拖
   lbDragging = true;
+  lbMoved = false;
   lbStartX = e.clientX - lbX;
   lbStartY = e.clientY - lbY;
-  lightboxImg.setPointerCapture(e.pointerId);
+  lbStage.classList.add('dragging');
+  lbStage.setPointerCapture(e.pointerId);
 });
-lightboxImg.addEventListener('pointermove', e => {
+lbStage.addEventListener('pointermove', e => {
   if (!lbDragging) return;
-  lbX = e.clientX - lbStartX;
-  lbY = e.clientY - lbStartY;
+  const nx = e.clientX - lbStartX;
+  const ny = e.clientY - lbStartY;
+  if (Math.abs(nx - lbX) > 3 || Math.abs(ny - lbY) > 3) lbMoved = true;
+  lbX = nx;
+  lbY = ny;
   updateLightbox();
 });
-lightboxImg.addEventListener('pointerup', () => { lbDragging = false; });
-lightboxImg.addEventListener('pointercancel', () => { lbDragging = false; });
+function endDrag(){
+  lbDragging = false;
+  lbStage.classList.remove('dragging');
+  setTimeout(() => { lbMoved = false; }, 0);
+}
+lbStage.addEventListener('pointerup', endDrag);
+lbStage.addEventListener('pointercancel', endDrag);
+lbStage.addEventListener('pointerleave', endDrag);
 
 /* ========== Tab 切换 ========== */
 const tabs = document.querySelectorAll('.tab');
