@@ -6,62 +6,138 @@
 <title>收款码</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{min-height:100vh;display:flex;align-items:center;justify-content:center;
-       background:#0f1115;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-       color:#e8eaed;padding:24px}
-  .card{width:100%;max-width:420px;background:#181b22;border:1px solid #262a33;
-        border-radius:18px;padding:24px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.5)}
-  h1{font-size:17px;margin-bottom:18px;font-weight:600}
-  .field{display:flex;gap:8px}
-  input{flex:1;padding:11px 13px;border-radius:10px;border:1px solid #2f3542;
-        background:#11141a;color:#e8eaed;font-size:15px;outline:none}
-  input:focus{border-color:#4f8cff}
-  button{padding:11px 16px;border:0;border-radius:10px;background:#4f8cff;
-         color:#fff;font-size:15px;cursor:pointer}
-  button:disabled{opacity:.55}
-  .msg{min-height:20px;font-size:13px;color:#9aa0a6;margin-top:12px}
-  .msg.err{color:#ff6b6b}
-  .qr{margin-top:16px;display:none}
-  .qr canvas{width:100%;max-width:280px;border-radius:12px;background:#fff}
+  html,body{min-height:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    color:#e8eaed;
+    padding:32px 20px;
+    background:#0f1115 center/cover no-repeat fixed;
+    transition:background-image .6s ease;
+  }
+  /* 背景遮罩，保证内容可读 */
+  body::before{
+    content:"";position:fixed;inset:0;
+    background:linear-gradient(180deg,rgba(8,10,14,.72),rgba(8,10,14,.88));
+    backdrop-filter:blur(3px);
+    z-index:-1;
+  }
 
-  /* ---- 可折叠内容 ---- */
-  details{margin-top:18px;text-align:left;border:1px solid #262a33;
-          border-radius:12px;background:#11141a;overflow:hidden}
+  .wrap{max-width:960px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
+
+  /* ---- 通用卡片 ---- */
+  .panel{
+    background:rgba(24,27,34,.86);
+    border:1px solid rgba(255,255,255,.08);
+    border-radius:18px;
+    padding:24px;
+    box-shadow:0 20px 50px rgba(0,0,0,.5);
+    backdrop-filter:blur(8px);
+  }
+  .panel-title{
+    font-size:14px;font-weight:600;letter-spacing:1px;
+    color:#9aa0a6;text-transform:uppercase;
+    display:flex;align-items:center;gap:8px;
+    margin-bottom:18px;
+  }
+  .panel-title::before{
+    content:"";width:4px;height:14px;border-radius:2px;background:#4f8cff;
+  }
+
+  /* ---- 双栏布局（桌面） ---- */
+  .columns{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  @media(max-width:720px){ .columns{grid-template-columns:1fr} }
+
+  /* ---- 收款码区 ---- */
+  .qr-area{text-align:center}
+  .field{display:flex;gap:8px;margin-bottom:6px}
+  input{
+    flex:1;padding:12px 14px;border-radius:10px;
+    border:1px solid rgba(255,255,255,.12);
+    background:rgba(17,20,26,.85);color:#e8eaed;
+    font-size:15px;outline:none;transition:border-color .15s;
+  }
+  input:focus{border-color:#4f8cff}
+  button{
+    padding:12px 18px;border:0;border-radius:10px;
+    background:#4f8cff;color:#fff;font-size:15px;cursor:pointer;
+    transition:opacity .15s;
+  }
+  button:disabled{opacity:.55;cursor:not-allowed}
+  .msg{min-height:20px;font-size:13px;color:#9aa0a6;margin-top:10px}
+  .msg.err{color:#ff6b6b}
+  .qr-box{margin-top:18px;display:none}
+  .qr-box canvas{
+    width:100%;max-width:300px;border-radius:14px;
+    background:#fff;padding:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);
+  }
+  .qr-placeholder{
+    margin-top:18px;padding:36px 16px;border:1px dashed rgba(255,255,255,.14);
+    border-radius:14px;color:#5f6672;font-size:13px;line-height:1.7;
+  }
+
+  /* ---- 其他区：折叠面板 ---- */
+  details{
+    border:1px solid rgba(255,255,255,.08);
+    border-radius:12px;background:rgba(17,20,26,.7);
+    overflow:hidden;
+  }
   details + details{margin-top:10px}
-  summary{cursor:pointer;padding:12px 14px;font-size:14px;font-weight:600;
-          list-style:none;display:flex;align-items:center;justify-content:space-between;
-          user-select:none}
+  summary{
+    cursor:pointer;padding:13px 15px;font-size:14px;font-weight:600;
+    list-style:none;display:flex;align-items:center;justify-content:space-between;
+    user-select:none;transition:background .15s;
+  }
   summary::-webkit-details-marker{display:none}
   summary::after{content:"▾";transition:transform .2s;color:#6b7280;font-size:12px}
   details[open] summary::after{transform:rotate(180deg)}
-  summary:hover{background:#161a22}
-  .content{padding:0 14px 14px;font-size:13px;line-height:1.75;color:#b8bdc6}
+  summary:hover{background:rgba(255,255,255,.04)}
+  .content{padding:0 15px 15px;font-size:13px;line-height:1.8;color:#b8bdc6}
   .content a{color:#4f8cff;text-decoration:none;word-break:break-all}
   .content a:hover{text-decoration:underline}
-  .content .sep{height:1px;background:#262a33;margin:10px 0}
-  .content code{background:#1d222c;padding:2px 6px;border-radius:5px;
-                font-size:12px;color:#e8eaed;font-family:ui-monospace,Menlo,monospace}
-  .content .label{color:#6b7280;font-size:12px;display:block;margin-top:8px}
-  .content .label:first-child{margin-top:0}
-  .content .qr-id{color:#e8eaed;font-weight:600;letter-spacing:.5px}
-  .content img{width:100%;border-radius:8px;margin-top:8px;background:#fff;padding:4px}
+  .sep{height:1px;background:rgba(255,255,255,.08);margin:10px 0}
+  .label{color:#6b7280;font-size:12px;display:block;margin-top:10px}
+  .label:first-child{margin-top:0}
+  .qr-id{color:#e8eaed;font-weight:600;letter-spacing:.5px}
+  .content img{width:100%;border-radius:10px;margin-top:8px;background:#fff;padding:4px}
 
-  .hint{font-size:12px;color:#6b7280;margin-top:16px;line-height:1.6}
+  .hint{font-size:12px;color:#6b7280;margin-top:16px;line-height:1.6;text-align:center}
+
+  /* 背景切换按钮 */
+  .bg-btn{
+    position:fixed;right:16px;bottom:16px;z-index:10;
+    padding:9px 14px;border-radius:999px;font-size:12px;
+    background:rgba(24,27,34,.85);color:#c8cdd6;
+    border:1px solid rgba(255,255,255,.12);
+    cursor:pointer;backdrop-filter:blur(6px);
+  }
+  .bg-btn:hover{background:rgba(36,40,50,.95)}
 </style>
 </head>
 <body>
-<div class="card">
-  <h1>🔒 收款码</h1>
 
-  <div class="field">
-    <input id="pwd" type="password" placeholder="请输入口令" autocomplete="off">
-    <button id="btn">解密</button>
-  </div>
-  <div class="msg" id="msg"></div>
+<div class="wrap">
 
-  <!-- 解密成功后显示 -->
-  <div id="result" style="display:none">
-    <div class="qr"><canvas id="qrCanvas"></canvas></div>
+  <!-- ========== 收款码区 ========== -->
+  <section class="panel qr-area">
+    <div class="panel-title">收款码</div>
+
+    <div class="field">
+      <input id="pwd" type="password" placeholder="请输入口令" autocomplete="off">
+      <button id="btn">解密</button>
+    </div>
+    <div class="msg" id="msg"></div>
+
+    <div class="qr-box" id="qrBox">
+      <canvas id="qrCanvas"></canvas>
+    </div>
+    <div class="qr-placeholder" id="qrPlaceholder">
+      输入口令后，收款码将显示在此处
+    </div>
+  </section>
+
+  <!-- ========== 其他区 ========== -->
+  <section class="panel">
+    <div class="panel-title">其他</div>
 
     <!-- 折叠 1：Windows 运行库 -->
     <details>
@@ -100,15 +176,46 @@
         <a href="https://lrg.ccwu.cc" target="_blank" rel="noopener">lrg.ccwu.cc</a>
       </div>
     </details>
-  </div>
+  </section>
 
   <div class="hint">收款码经 Gilbert 曲线混淆存储，口令仅本地参与解密。</div>
 </div>
 
+<button class="bg-btn" id="bgBtn">换背景</button>
+
 <script>
+/* ========== 背景：必应随机壁纸 ========== */
+const bgApis = [
+  'https://bing.img.run/1920x1080.php',        // 随机必应壁纸
+  'https://api.dujin.org/bing/1920.php',       // 备用
+  'https://bing.biturl.top/?resolution=1920&format=image&index=random&mkt=zh-CN'
+];
+let bgIdx = 0;
+
+function setBg(){
+  // 用图片预加载，避免闪白
+  const url = bgApis[bgIdx % bgApis.length] + (bgApis[bgIdx % bgApis.length].includes('?') ? '&' : '?') + '_t=' + Date.now();
+  const img = new Image();
+  img.onload = () => { document.body.style.backgroundImage = `url("${url}")`; };
+  img.onerror = () => {
+    // 当前 API 失败，自动换下一个
+    bgIdx++;
+    if (bgIdx < bgApis.length * 2) setBg();
+  };
+  img.src = url;
+}
+setBg();
+
+document.getElementById('bgBtn').addEventListener('click', () => {
+  bgIdx++;
+  setBg();
+});
+
+/* ========== 解密逻辑 ========== */
 const $ = id => document.getElementById(id);
 const pwdEl = $('pwd'), btn = $('btn'), msg = $('msg'),
-      result = $('result'), canvas = $('qrCanvas');
+      qrBox = $('qrBox'), canvas = $('qrCanvas'),
+      placeholder = $('qrPlaceholder');
 
 function b64ToBytes(b64){
   const bin = atob(b64.replace(/[\s\r\n]/g, ''));
@@ -118,7 +225,7 @@ function b64ToBytes(b64){
 }
 
 async function fetchRealKey(pwd){
-  const res = await fetch('./key.enc', { cache: 'no-cache' });
+  const res = await fetch('./key.enc', { cache:'no-cache' });
   if (!res.ok) throw new Error('拉取 key.enc 失败');
   const raw = b64ToBytes((await res.text()).trim());
   const iv = raw.slice(0, 12);
@@ -136,41 +243,42 @@ async function realKeyToOffset(realKey){
   return (Number(n) / Number(256n ** 6n)) * 1.618;
 }
 
-function gilbertCurve(w, h) {
-  function d2xy(n, d) {
+function gilbertCurve(w, h){
+  function d2xy(n, d){
     let rx, ry, t = d, x = 0, y = 0;
-    for (let s = 1; s < n; s *= 2) {
+    for (let s = 1; s < n; s *= 2){
       rx = 1 & (t / 2); ry = 1 & (t ^ rx);
       [x, y] = rot(s, x, y, rx, ry);
       x += s * rx; y += s * ry; t = Math.floor(t / 4);
     }
     return [x, y];
   }
-  function rot(n, x, y, rx, ry) {
-    if (ry === 0) {
-      if (rx === 1) { x = n - 1 - x; y = n - 1 - y; }
+  function rot(n, x, y, rx, ry){
+    if (ry === 0){
+      if (rx === 1){ x = n - 1 - x; y = n - 1 - y; }
       [x, y] = [y, x];
     }
     return [x, y];
   }
   const size = Math.max(w, h);
   const order = [];
-  for (let i = 0; i < size * size; i++) {
+  for (let i = 0; i < size * size; i++){
     const [x, y] = d2xy(size, i);
     if (x < w && y < h) order.push([x, y]);
   }
   return order;
 }
 
-async function unlock() {
+async function unlock(){
   const pwd = pwdEl.value;
-  if (!pwd) { msg.className='msg err'; msg.textContent='请输入口令'; return; }
+  if (!pwd){ msg.className='msg err'; msg.textContent='请输入口令'; return; }
 
   btn.disabled = true;
   msg.className = 'msg'; msg.textContent = '拉取密钥中…';
-  result.style.display = 'none';
+  qrBox.style.display = 'none';
+  placeholder.style.display = 'none';
 
-  try {
+  try{
     const realKey = await fetchRealKey(pwd);
     msg.textContent = '解密图片中…';
     const key = await realKeyToOffset(realKey);
@@ -195,7 +303,7 @@ async function unlock() {
     const total = curve.length;
     const offset = Math.floor(key * ((Math.sqrt(5) - 1) / 2) * total);
 
-    for (let i = 0; i < total; i++) {
+    for (let i = 0; i < total; i++){
       const [dx, dy] = curve[i];
       const [sx, sy] = curve[(i + offset) % total];
       const si = (sy * w + sx) * 4;
@@ -207,12 +315,13 @@ async function unlock() {
     }
 
     dstCtx.putImageData(dst, 0, 0);
-    result.style.display = 'block';
+    qrBox.style.display = 'block';
     msg.className = 'msg'; msg.textContent = '解密成功';
-  } catch (e) {
+  }catch(e){
     console.error(e);
     msg.className = 'msg err'; msg.textContent = '解密失败：口令错误或文件缺失';
-  } finally {
+    placeholder.style.display = 'block';
+  }finally{
     btn.disabled = false;
   }
 }
