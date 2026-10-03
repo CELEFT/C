@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>收款码</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{min-height:100vh;display:flex;align-items:center;justify-content:center;
+       background:#0f1115;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+       color:#e8eaed;padding:24px}
+  .card{width:100%;max-width:420px;background:#181b22;border:1px solid #262a33;
+        border-radius:18px;padding:24px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.5)}
+  h1{font-size:17px;margin-bottom:18px;font-weight:600}
+  .field{display:flex;gap:8px}
+  input{flex:1;padding:11px 13px;border-radius:10px;border:1px solid #2f3542;
+        background:#11141a;color:#e8eaed;font-size:15px;outline:none}
+  input:focus{border-color:#4f8cff}
+  button{padding:11px 16px;border:0;border-radius:10px;background:#4f8cff;
+         color:#fff;font-size:15px;cursor:pointer}
+  button:disabled{opacity:.55}
+  .msg{min-height:20px;font-size:13px;color:#9aa0a6;margin-top:12px}
+  .msg.err{color:#ff6b6b}
+  .qr{margin-top:16px;display:none}
+  .qr canvas{width:100%;max-width:280px;border-radius:12px;background:#fff}
+
+  /* ---- 可折叠内容 ---- */
+  details{margin-top:18px;text-align:left;border:1px solid #262a33;
+          border-radius:12px;background:#11141a;overflow:hidden}
+  details + details{margin-top:10px}
+  summary{cursor:pointer;padding:12px 14px;font-size:14px;font-weight:600;
+          list-style:none;display:flex;align-items:center;justify-content:space-between;
+          user-select:none}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"▾";transition:transform .2s;color:#6b7280;font-size:12px}
+  details[open] summary::after{transform:rotate(180deg)}
+  summary:hover{background:#161a22}
+  .content{padding:0 14px 14px;font-size:13px;line-height:1.75;color:#b8bdc6}
+  .content a{color:#4f8cff;text-decoration:none;word-break:break-all}
+  .content a:hover{text-decoration:underline}
+  .content .sep{height:1px;background:#262a33;margin:10px 0}
+  .content code{background:#1d222c;padding:2px 6px;border-radius:5px;
+                font-size:12px;color:#e8eaed;font-family:ui-monospace,Menlo,monospace}
+  .content .label{color:#6b7280;font-size:12px;display:block;margin-top:8px}
+  .content .label:first-child{margin-top:0}
+  .content .qr-id{color:#e8eaed;font-weight:600;letter-spacing:.5px}
+  .content img{width:100%;border-radius:8px;margin-top:8px;background:#fff;padding:4px}
+
+  .hint{font-size:12px;color:#6b7280;margin-top:16px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🔒 收款码</h1>
+
+  <div class="field">
+    <input id="pwd" type="password" placeholder="请输入口令" autocomplete="off">
+    <button id="btn">解密</button>
+  </div>
+  <div class="msg" id="msg"></div>
+
+  <!-- 解密成功后显示 -->
+  <div id="result" style="display:none">
+    <div class="qr"><canvas id="qrCanvas"></canvas></div>
+
+    <!-- 折叠 1：Windows 运行库 -->
+    <details>
+      <summary>Windows 运行库</summary>
+      <div class="content">
+        <a href="https://github.com/CELEFT/C/releases/download/windows-runing-library/GRLPackage_7.3.26.0715_mefcl.exe" target="_blank" rel="noopener">
+          GRLPackage 点击下载
+        </a><br>
+        <a href="https://github.com/CELEFT/C/releases/tag/windows-runing-library" target="_blank" rel="noopener">
+          查看详情
+        </a>
+        <div class="sep"></div>
+        <span class="label">you can get from :</span>
+        <a href="https://www.mefcl.com/grlpackage.html" target="_blank" rel="noopener">GRLPackage</a>
+        &nbsp;·&nbsp;
+        <a href="https://www.ghxi.com/yxkhj.html" target="_blank" rel="noopener">MSVBCRT.AIO</a>
+      </div>
+    </details>
+
+    <!-- 折叠 2：Qrcode -->
+    <details>
+      <summary>Qrcode</summary>
+      <div class="content">
+        <span class="label">Qrcode 编号</span>
+        <span class="qr-id">3694039797</span>
+        <span class="label">截图</span>
+        <img src="./qrcode_1781534289339.jpg" alt="截图"
+             onerror="this.style.display='none';this.insertAdjacentHTML('afterend','<span style=&quot;color:#6b7280;font-size:12px&quot;>（截图文件未上传）</span>')">
+      </div>
+    </details>
+
+    <!-- 折叠 3：友链 -->
+    <details>
+      <summary>友链</summary>
+      <div class="content">
+        <a href="https://lrg.ccwu.cc" target="_blank" rel="noopener">lrg.ccwu.cc</a>
+      </div>
+    </details>
+  </div>
+
+  <div class="hint">收款码经 Gilbert 曲线混淆存储，口令仅本地参与解密。</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const pwdEl = $('pwd'), btn = $('btn'), msg = $('msg'),
+      result = $('result'), canvas = $('qrCanvas');
+
+function b64ToBytes(b64){
+  const bin = atob(b64.replace(/[\s\r\n]/g, ''));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function fetchRealKey(pwd){
+  const res = await fetch('./key.enc', { cache: 'no-cache' });
+  if (!res.ok) throw new Error('拉取 key.enc 失败');
+  const raw = b64ToBytes((await res.text()).trim());
+  const iv = raw.slice(0, 12);
+  const ct = raw.slice(12);
+  const keyBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pwd));
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name:'AES-GCM' }, false, ['decrypt']);
+  const plain = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, ct);
+  return new TextDecoder().decode(plain);
+}
+
+async function realKeyToOffset(realKey){
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(realKey)));
+  let n = 0n;
+  for (let i = 0; i < 6; i++) n = n * 256n + BigInt(hash[i]);
+  return (Number(n) / Number(256n ** 6n)) * 1.618;
+}
+
+function gilbertCurve(w, h) {
+  function d2xy(n, d) {
+    let rx, ry, t = d, x = 0, y = 0;
+    for (let s = 1; s < n; s *= 2) {
+      rx = 1 & (t / 2); ry = 1 & (t ^ rx);
+      [x, y] = rot(s, x, y, rx, ry);
+      x += s * rx; y += s * ry; t = Math.floor(t / 4);
+    }
+    return [x, y];
+  }
+  function rot(n, x, y, rx, ry) {
+    if (ry === 0) {
+      if (rx === 1) { x = n - 1 - x; y = n - 1 - y; }
+      [x, y] = [y, x];
+    }
+    return [x, y];
+  }
+  const size = Math.max(w, h);
+  const order = [];
+  for (let i = 0; i < size * size; i++) {
+    const [x, y] = d2xy(size, i);
+    if (x < w && y < h) order.push([x, y]);
+  }
+  return order;
+}
+
+async function unlock() {
+  const pwd = pwdEl.value;
+  if (!pwd) { msg.className='msg err'; msg.textContent='请输入口令'; return; }
+
+  btn.disabled = true;
+  msg.className = 'msg'; msg.textContent = '拉取密钥中…';
+  result.style.display = 'none';
+
+  try {
+    const realKey = await fetchRealKey(pwd);
+    msg.textContent = '解密图片中…';
+    const key = await realKeyToOffset(realKey);
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = './qrcode.obf.png';
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = w; srcCanvas.height = h;
+    const srcCtx = srcCanvas.getContext('2d');
+    srcCtx.drawImage(img, 0, 0);
+    const src = srcCtx.getImageData(0, 0, w, h);
+
+    canvas.width = w; canvas.height = h;
+    const dstCtx = canvas.getContext('2d');
+    const dst = dstCtx.createImageData(w, h);
+
+    const curve = gilbertCurve(w, h);
+    const total = curve.length;
+    const offset = Math.floor(key * ((Math.sqrt(5) - 1) / 2) * total);
+
+    for (let i = 0; i < total; i++) {
+      const [dx, dy] = curve[i];
+      const [sx, sy] = curve[(i + offset) % total];
+      const si = (sy * w + sx) * 4;
+      const di = (dy * w + dx) * 4;
+      dst.data[di]     = src.data[si];
+      dst.data[di + 1] = src.data[si + 1];
+      dst.data[di + 2] = src.data[si + 2];
+      dst.data[di + 3] = src.data[si + 3];
+    }
+
+    dstCtx.putImageData(dst, 0, 0);
+    result.style.display = 'block';
+    msg.className = 'msg'; msg.textContent = '解密成功';
+  } catch (e) {
+    console.error(e);
+    msg.className = 'msg err'; msg.textContent = '解密失败：口令错误或文件缺失';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+btn.addEventListener('click', unlock);
+pwdEl.addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
+</script>
+</body>
+</html>
