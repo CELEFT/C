@@ -43,7 +43,6 @@
 
   .qr-area{text-align:center}
 
-  /* ---- Tab 选框 ---- */
   .tabs{
     display:flex;gap:8px;margin-bottom:16px;
     background:rgba(17,20,26,.6);
@@ -58,12 +57,8 @@
     display:flex;align-items:center;justify-content:center;gap:6px;
   }
   .tab:hover{color:#e8eaed}
-  .tab.active{
-    background:#4f8cff;color:#fff;
-    box-shadow:0 4px 14px rgba(79,140,255,.35);
-  }
-  .tab.active.wechat{background:#07c160;box-shadow:0 4px 14px rgba(7,193,96,.35)}
-  .tab.active.alipay{background:#1677ff;box-shadow:0 4px 14px rgba(22,119,255,.35)}
+  .tab.active.wechat{background:#07c160;color:#fff;box-shadow:0 4px 14px rgba(7,193,96,.35)}
+  .tab.active.alipay{background:#1677ff;color:#fff;box-shadow:0 4px 14px rgba(22,119,255,.35)}
 
   .field{display:flex;gap:8px;margin-bottom:6px}
   input{
@@ -79,6 +74,15 @@
     transition:opacity .15s;
   }
   button:disabled{opacity:.55;cursor:not-allowed}
+
+  .pwd-hint{
+    font-size:12px;color:#6b7280;
+    margin-top:8px;text-align:left;
+    display:flex;align-items:center;gap:6px;
+    padding-left:2px;
+  }
+  .pwd-hint::before{content:"💡";font-size:13px}
+
   .msg{min-height:20px;font-size:13px;color:#9aa0a6;margin-top:10px}
   .msg.err{color:#ff6b6b}
 
@@ -128,7 +132,6 @@
   }
   .bg-btn:hover{background:rgba(36,40,50,.95)}
 
-  /* ---- 图片放大查看器 ---- */
   .lightbox {
     position: fixed; inset: 0; z-index: 100;
     background: rgba(0,0,0,.94);
@@ -162,12 +165,9 @@
 <body>
 
 <div class="wrap">
-
-  <!-- ========== 收款码区 ========== -->
   <section class="panel qr-area">
     <div class="panel-title">收款码</div>
 
-    <!-- 支付方式选框 -->
     <div class="tabs">
       <button class="tab wechat active" data-target="wechat">微信支付</button>
       <button class="tab alipay" data-target="alipay">支付宝支付</button>
@@ -177,6 +177,7 @@
       <input id="pwd" type="password" placeholder="请输入口令" autocomplete="off">
       <button id="btn">解密</button>
     </div>
+    <div class="pwd-hint">谁是gay？</div>
     <div class="msg" id="msg"></div>
 
     <div class="qr-box" id="qrBox">
@@ -187,7 +188,6 @@
     </div>
   </section>
 
-  <!-- ========== 其他区 ========== -->
   <section class="panel">
     <div class="panel-title">其他</div>
 
@@ -227,12 +227,11 @@
     </details>
   </section>
 
-  <div class="hint">收款码经 AES-256-GCM 加密存储，口令与密钥均不落盘。</div>
+  <div class="hint">收款码经 AES-256-GCM 加密存储，口令仅本地参与解密。</div>
 </div>
 
 <button class="bg-btn" id="bgBtn">换背景</button>
 
-<!-- 图片放大查看器 -->
 <div class="lightbox" id="lightbox" hidden>
   <img id="lightboxImg" alt="收款码">
   <div class="lb-toolbar">
@@ -252,7 +251,7 @@ const IMAGE_FILES = {
 const KEY_FILE = './key.enc';
 
 let currentTab = 'wechat';
-let decrypted = { wechat: null, alipay: null };  // 缓存 dataURL
+let decrypted = { wechat: null, alipay: null };
 
 /* ========== 背景 ========== */
 const bgApis = [
@@ -261,16 +260,12 @@ const bgApis = [
   'https://bing.biturl.top/?resolution=1920&format=image&index=random&mkt=zh-CN'
 ];
 let bgIdx = 0;
-
 function setBg(){
   const base = bgApis[bgIdx % bgApis.length];
   const url = base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now();
   const img = new Image();
   img.onload = () => { document.body.style.backgroundImage = `url("${url}")`; };
-  img.onerror = () => {
-    bgIdx++;
-    if (bgIdx < bgApis.length * 2) setBg();
-  };
+  img.onerror = () => { bgIdx++; if (bgIdx < bgApis.length * 2) setBg(); };
   img.src = url;
 }
 setBg();
@@ -289,7 +284,14 @@ function b64ToBytes(b64){
   return out;
 }
 
-/* 口令 → 真密钥 */
+/* 口令别名：djrisgay 与 丁嘉睿是gay 等价 */
+function normalizePwd(raw){
+  const s = raw.trim();
+  if (s.toLowerCase() === 'djrisgay') return '丁嘉睿是gay';
+  return s;
+}
+
+/* 口令 → 真密钥（SHA-256, UTF-8） */
 async function fetchRealKey(pwd){
   const res = await fetch(KEY_FILE, { cache:'no-cache' });
   if (!res.ok) throw new Error('拉取 key.enc 失败');
@@ -303,13 +305,13 @@ async function fetchRealKey(pwd){
   return new TextDecoder().decode(plain);
 }
 
-/* 真密钥 → SHA-512 → 前 32 字节 AES 密钥 */
+/* 真密钥 → SHA-512 → 前 32 字节 */
 async function deriveImageKey(realKey){
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-512', new TextEncoder().encode(realKey)));
   return hash.slice(0, 32);
 }
 
-/* 拉取并解密某个支付方式的图片 */
+/* 拉取并解密图片 → dataURL */
 async function fetchImage(url, imageKey){
   const res = await fetch(url, { cache:'no-cache' });
   if (!res.ok) throw new Error('文件不存在: ' + url);
@@ -319,10 +321,10 @@ async function fetchImage(url, imageKey){
 
   const key = await crypto.subtle.importKey('raw', imageKey, { name:'AES-GCM' }, false, ['decrypt']);
   const plain = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, ct);
-  return new TextDecoder().decode(plain);  // dataURL
+  return new TextDecoder().decode(plain);
 }
 
-/* ========== 图片放大查看器 ========== */
+/* ========== 放大查看器 ========== */
 const lightbox = $('lightbox');
 const lightboxImg = $('lightboxImg');
 let lbScale = 1, lbX = 0, lbY = 0;
@@ -387,7 +389,7 @@ function showCurrent() {
     placeholder.style.display = 'none';
     const label = currentTab === 'wechat' ? '微信支付' : '支付宝支付';
     msg.className = 'msg';
-    msg.textContent = `当前显示：${label}（点击图片可全屏）`;
+    msg.textContent = `当前：${label}（点击图片全屏）`;
   } else {
     qrBox.style.display = 'none';
     placeholder.style.display = 'block';
@@ -395,7 +397,6 @@ function showCurrent() {
   }
 }
 
-/* 点击收款码 → 全屏 */
 qrBox.onclick = () => {
   const src = qrImg.src;
   if (src) openLightbox(src);
@@ -413,14 +414,10 @@ async function unlock(){
   decrypted = { wechat: null, alipay: null };
 
   try{
-    // 1. 口令 → 真密钥
-    const realKey = await fetchRealKey(pwd);
-
-    // 2. 真密钥 → SHA-512 → AES 密钥
+    const realKey = await fetchRealKey(normalizePwd(pwd));
     const imageKey = await deriveImageKey(realKey);
     msg.textContent = '解密图片中…';
 
-    // 3. 并行解密两个支付方式
     const results = await Promise.allSettled([
       fetchImage(IMAGE_FILES.wechat, imageKey),
       fetchImage(IMAGE_FILES.alipay, imageKey)
@@ -433,14 +430,12 @@ async function unlock(){
       throw new Error('两个收款码都未配置');
     }
 
-    // 4. 显示当前 tab
     if (!decrypted[currentTab]) {
       currentTab = decrypted.wechat ? 'wechat' : 'alipay';
       tabs.forEach(x => x.classList.toggle('active', x.dataset.target === currentTab));
     }
     showCurrent();
 
-    // 5. 自动全屏
     const firstSrc = decrypted[currentTab];
     if (firstSrc) openLightbox(firstSrc);
 
@@ -448,7 +443,7 @@ async function unlock(){
     console.error(e);
     msg.className = 'msg err'; msg.textContent = '解密失败：口令错误或文件缺失';
     placeholder.style.display = 'block';
-    placeholder.textContent = '解密失败，请检查口令或确认加密文件已上传';
+    placeholder.textContent = '解密失败，请检查口令';
   }finally{
     btn.disabled = false;
   }
