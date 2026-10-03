@@ -41,10 +41,30 @@
     content:"";width:4px;height:14px;border-radius:2px;background:#4f8cff;
   }
 
-  .columns{display:grid;grid-template-columns:1fr 1fr;gap:22px}
-  @media(max-width:720px){ .columns{grid-template-columns:1fr} }
-
   .qr-area{text-align:center}
+
+  /* ---- Tab 选框 ---- */
+  .tabs{
+    display:flex;gap:8px;margin-bottom:16px;
+    background:rgba(17,20,26,.6);
+    padding:5px;border-radius:12px;
+    border:1px solid rgba(255,255,255,.06);
+  }
+  .tab{
+    flex:1;padding:10px 14px;border-radius:8px;
+    background:transparent;color:#9aa0a6;
+    border:0;cursor:pointer;font-size:14px;font-weight:500;
+    transition:all .18s;
+    display:flex;align-items:center;justify-content:center;gap:6px;
+  }
+  .tab:hover{color:#e8eaed}
+  .tab.active{
+    background:#4f8cff;color:#fff;
+    box-shadow:0 4px 14px rgba(79,140,255,.35);
+  }
+  .tab.active.wechat{background:#07c160;box-shadow:0 4px 14px rgba(7,193,96,.35)}
+  .tab.active.alipay{background:#1677ff;box-shadow:0 4px 14px rgba(22,119,255,.35)}
+
   .field{display:flex;gap:8px;margin-bottom:6px}
   input{
     flex:1;padding:12px 14px;border-radius:10px;
@@ -61,8 +81,9 @@
   button:disabled{opacity:.55;cursor:not-allowed}
   .msg{min-height:20px;font-size:13px;color:#9aa0a6;margin-top:10px}
   .msg.err{color:#ff6b6b}
+
   .qr-box{margin-top:18px;display:none}
-  .qr-box canvas{
+  .qr-box img{
     width:100%;max-width:300px;border-radius:14px;
     background:#fff;padding:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);
     cursor:zoom-in;
@@ -115,20 +136,15 @@
     touch-action: none;
   }
   .lightbox[hidden] { display: none; }
-
   .lightbox img {
-    max-width: 96vw;
-    max-height: 92vh;
-    width: auto;
-    height: auto;
+    max-width: 96vw; max-height: 92vh;
+    width: auto; height: auto;
     transform-origin: center center;
     transition: transform .12s ease;
-    user-select: none;
-    -webkit-user-drag: none;
+    user-select: none; -webkit-user-drag: none;
     cursor: grab;
   }
   .lightbox img:active { cursor: grabbing; }
-
   .lb-toolbar {
     position: absolute; bottom: 22px; left: 50%;
     transform: translateX(-50%);
@@ -138,8 +154,7 @@
     width: 46px; height: 46px; border-radius: 50%;
     border: 0; background: rgba(255,255,255,.16);
     color: #fff; font-size: 22px; line-height: 1;
-    backdrop-filter: blur(6px);
-    cursor: pointer;
+    backdrop-filter: blur(6px); cursor: pointer;
   }
   .lb-toolbar button:active { background: rgba(255,255,255,.3); }
 </style>
@@ -152,6 +167,12 @@
   <section class="panel qr-area">
     <div class="panel-title">收款码</div>
 
+    <!-- 支付方式选框 -->
+    <div class="tabs">
+      <button class="tab wechat active" data-target="wechat">微信支付</button>
+      <button class="tab alipay" data-target="alipay">支付宝支付</button>
+    </div>
+
     <div class="field">
       <input id="pwd" type="password" placeholder="请输入口令" autocomplete="off">
       <button id="btn">解密</button>
@@ -159,7 +180,7 @@
     <div class="msg" id="msg"></div>
 
     <div class="qr-box" id="qrBox">
-      <canvas id="qrCanvas"></canvas>
+      <img id="qrImg" alt="收款码">
     </div>
     <div class="qr-placeholder" id="qrPlaceholder">
       输入口令后，收款码将显示在此处
@@ -170,7 +191,6 @@
   <section class="panel">
     <div class="panel-title">其他</div>
 
-    <!-- 折叠 1：Windows 运行库 -->
     <details>
       <summary>Windows 运行库</summary>
       <div class="content">
@@ -188,7 +208,6 @@
       </div>
     </details>
 
-    <!-- 折叠 2：Qrcode -->
     <details>
       <summary>Qrcode</summary>
       <div class="content">
@@ -200,7 +219,6 @@
       </div>
     </details>
 
-    <!-- 折叠 3：友链 -->
     <details>
       <summary>友链</summary>
       <div class="content">
@@ -209,7 +227,7 @@
     </details>
   </section>
 
-  <div class="hint">收款码经 Gilbert 曲线混淆存储，口令仅本地参与解密。</div>
+  <div class="hint">收款码经 AES-256-GCM 加密存储，口令与密钥均不落盘。</div>
 </div>
 
 <button class="bg-btn" id="bgBtn">换背景</button>
@@ -226,7 +244,17 @@
 </div>
 
 <script>
-/* ========== 背景：必应随机壁纸 ========== */
+/* ========== 配置 ========== */
+const IMAGE_FILES = {
+  wechat: './wechat.enc',
+  alipay: './alipay.enc'
+};
+const KEY_FILE = './key.enc';
+
+let currentTab = 'wechat';
+let decrypted = { wechat: null, alipay: null };  // 缓存 dataURL
+
+/* ========== 背景 ========== */
 const bgApis = [
   'https://bing.img.run/1920x1080.php',
   'https://api.dujin.org/bing/1920.php',
@@ -235,7 +263,8 @@ const bgApis = [
 let bgIdx = 0;
 
 function setBg(){
-  const url = bgApis[bgIdx % bgApis.length] + (bgApis[bgIdx % bgApis.length].includes('?') ? '&' : '?') + '_t=' + Date.now();
+  const base = bgApis[bgIdx % bgApis.length];
+  const url = base + (base.includes('?') ? '&' : '?') + '_t=' + Date.now();
   const img = new Image();
   img.onload = () => { document.body.style.backgroundImage = `url("${url}")`; };
   img.onerror = () => {
@@ -245,16 +274,12 @@ function setBg(){
   img.src = url;
 }
 setBg();
-
-document.getElementById('bgBtn').addEventListener('click', () => {
-  bgIdx++;
-  setBg();
-});
+document.getElementById('bgBtn').addEventListener('click', () => { bgIdx++; setBg(); });
 
 /* ========== 工具 ========== */
 const $ = id => document.getElementById(id);
 const pwdEl = $('pwd'), btn = $('btn'), msg = $('msg'),
-      qrBox = $('qrBox'), canvas = $('qrCanvas'),
+      qrBox = $('qrBox'), qrImg = $('qrImg'),
       placeholder = $('qrPlaceholder');
 
 function b64ToBytes(b64){
@@ -264,49 +289,37 @@ function b64ToBytes(b64){
   return out;
 }
 
+/* 口令 → 真密钥 */
 async function fetchRealKey(pwd){
-  const res = await fetch('./key.enc', { cache:'no-cache' });
+  const res = await fetch(KEY_FILE, { cache:'no-cache' });
   if (!res.ok) throw new Error('拉取 key.enc 失败');
   const raw = b64ToBytes((await res.text()).trim());
   const iv = raw.slice(0, 12);
   const ct = raw.slice(12);
+
   const keyBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pwd));
   const key = await crypto.subtle.importKey('raw', keyBytes, { name:'AES-GCM' }, false, ['decrypt']);
   const plain = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, ct);
   return new TextDecoder().decode(plain);
 }
 
-async function realKeyToOffset(realKey){
-  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(realKey)));
-  let n = 0n;
-  for (let i = 0; i < 6; i++) n = n * 256n + BigInt(hash[i]);
-  return (Number(n) / Number(256n ** 6n)) * 1.618;
+/* 真密钥 → SHA-512 → 前 32 字节 AES 密钥 */
+async function deriveImageKey(realKey){
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-512', new TextEncoder().encode(realKey)));
+  return hash.slice(0, 32);
 }
 
-function gilbertCurve(w, h){
-  function d2xy(n, d){
-    let rx, ry, t = d, x = 0, y = 0;
-    for (let s = 1; s < n; s *= 2){
-      rx = 1 & (t / 2); ry = 1 & (t ^ rx);
-      [x, y] = rot(s, x, y, rx, ry);
-      x += s * rx; y += s * ry; t = Math.floor(t / 4);
-    }
-    return [x, y];
-  }
-  function rot(n, x, y, rx, ry){
-    if (ry === 0){
-      if (rx === 1){ x = n - 1 - x; y = n - 1 - y; }
-      [x, y] = [y, x];
-    }
-    return [x, y];
-  }
-  const size = Math.max(w, h);
-  const order = [];
-  for (let i = 0; i < size * size; i++){
-    const [x, y] = d2xy(size, i);
-    if (x < w && y < h) order.push([x, y]);
-  }
-  return order;
+/* 拉取并解密某个支付方式的图片 */
+async function fetchImage(url, imageKey){
+  const res = await fetch(url, { cache:'no-cache' });
+  if (!res.ok) throw new Error('文件不存在: ' + url);
+  const raw = b64ToBytes((await res.text()).trim());
+  const iv = raw.slice(0, 12);
+  const ct = raw.slice(12);
+
+  const key = await crypto.subtle.importKey('raw', imageKey, { name:'AES-GCM' }, false, ['decrypt']);
+  const plain = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, ct);
+  return new TextDecoder().decode(plain);  // dataURL
 }
 
 /* ========== 图片放大查看器 ========== */
@@ -316,47 +329,30 @@ let lbScale = 1, lbX = 0, lbY = 0;
 let lbDragging = false, lbStartX = 0, lbStartY = 0;
 
 function updateLightbox() {
-  lightboxImg.style.transform =
-    `translate(${lbX}px, ${lbY}px) scale(${lbScale})`;
+  lightboxImg.style.transform = `translate(${lbX}px, ${lbY}px) scale(${lbScale})`;
 }
-
 function openLightbox(src) {
   lightboxImg.src = src;
   lbScale = 1; lbX = 0; lbY = 0;
   updateLightbox();
   lightbox.hidden = false;
   document.body.style.overflow = 'hidden';
-
   lightboxImg.onload = () => {
     const vw = window.innerWidth * 0.9;
     const vh = window.innerHeight * 0.85;
-    const iw = lightboxImg.naturalWidth;
-    const ih = lightboxImg.naturalHeight;
-    const fit = Math.min(vw / iw, vh / ih);
+    const fit = Math.min(vw / lightboxImg.naturalWidth, vh / lightboxImg.naturalHeight);
     lbScale = Math.max(1, Math.min(fit, 3));
     updateLightbox();
   };
 }
-
 function closeLightbox() {
   lightbox.hidden = true;
   document.body.style.overflow = '';
 }
-
-$('lbZoomIn').onclick = () => {
-  lbScale = Math.min(lbScale * 1.25, 6);
-  updateLightbox();
-};
-$('lbZoomOut').onclick = () => {
-  lbScale = Math.max(lbScale / 1.25, 0.5);
-  updateLightbox();
-};
-$('lbReset').onclick = () => {
-  lbScale = 1; lbX = 0; lbY = 0;
-  updateLightbox();
-};
+$('lbZoomIn').onclick = () => { lbScale = Math.min(lbScale * 1.25, 6); updateLightbox(); };
+$('lbZoomOut').onclick = () => { lbScale = Math.max(lbScale / 1.25, 0.5); updateLightbox(); };
+$('lbReset').onclick = () => { lbScale = 1; lbX = 0; lbY = 0; updateLightbox(); };
 $('lbClose').onclick = closeLightbox;
-
 lightboxImg.addEventListener('pointerdown', e => {
   lbDragging = true;
   lbStartX = e.clientX - lbX;
@@ -372,6 +368,39 @@ lightboxImg.addEventListener('pointermove', e => {
 lightboxImg.addEventListener('pointerup', () => { lbDragging = false; });
 lightboxImg.addEventListener('pointercancel', () => { lbDragging = false; });
 
+/* ========== Tab 切换 ========== */
+const tabs = document.querySelectorAll('.tab');
+tabs.forEach(t => {
+  t.addEventListener('click', () => {
+    tabs.forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    currentTab = t.dataset.target;
+    showCurrent();
+  });
+});
+
+function showCurrent() {
+  const dataURL = decrypted[currentTab];
+  if (dataURL) {
+    qrImg.src = dataURL;
+    qrBox.style.display = 'block';
+    placeholder.style.display = 'none';
+    const label = currentTab === 'wechat' ? '微信支付' : '支付宝支付';
+    msg.className = 'msg';
+    msg.textContent = `当前显示：${label}（点击图片可全屏）`;
+  } else {
+    qrBox.style.display = 'none';
+    placeholder.style.display = 'block';
+    placeholder.textContent = '请先输入口令解密';
+  }
+}
+
+/* 点击收款码 → 全屏 */
+qrBox.onclick = () => {
+  const src = qrImg.src;
+  if (src) openLightbox(src);
+};
+
 /* ========== 解密 ========== */
 async function unlock(){
   const pwd = pwdEl.value;
@@ -381,55 +410,45 @@ async function unlock(){
   msg.className = 'msg'; msg.textContent = '拉取密钥中…';
   qrBox.style.display = 'none';
   placeholder.style.display = 'none';
+  decrypted = { wechat: null, alipay: null };
 
   try{
+    // 1. 口令 → 真密钥
     const realKey = await fetchRealKey(pwd);
+
+    // 2. 真密钥 → SHA-512 → AES 密钥
+    const imageKey = await deriveImageKey(realKey);
     msg.textContent = '解密图片中…';
-    const key = await realKeyToOffset(realKey);
 
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = './qrcode.obf.png';
-    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+    // 3. 并行解密两个支付方式
+    const results = await Promise.allSettled([
+      fetchImage(IMAGE_FILES.wechat, imageKey),
+      fetchImage(IMAGE_FILES.alipay, imageKey)
+    ]);
 
-    const w = img.naturalWidth, h = img.naturalHeight;
-    const srcCanvas = document.createElement('canvas');
-    srcCanvas.width = w; srcCanvas.height = h;
-    const srcCtx = srcCanvas.getContext('2d');
-    srcCtx.drawImage(img, 0, 0);
-    const src = srcCtx.getImageData(0, 0, w, h);
+    decrypted.wechat = results[0].status === 'fulfilled' ? results[0].value : null;
+    decrypted.alipay = results[1].status === 'fulfilled' ? results[1].value : null;
 
-    canvas.width = w; canvas.height = h;
-    const dstCtx = canvas.getContext('2d');
-    const dst = dstCtx.createImageData(w, h);
-
-    const curve = gilbertCurve(w, h);
-    const total = curve.length;
-    const offset = Math.floor(key * ((Math.sqrt(5) - 1) / 2) * total);
-
-    for (let i = 0; i < total; i++){
-      const [dx, dy] = curve[i];
-      const [sx, sy] = curve[(i + offset) % total];
-      const si = (sy * w + sx) * 4;
-      const di = (dy * w + dx) * 4;
-      dst.data[di]     = src.data[si];
-      dst.data[di + 1] = src.data[si + 1];
-      dst.data[di + 2] = src.data[si + 2];
-      dst.data[di + 3] = src.data[si + 3];
+    if (!decrypted.wechat && !decrypted.alipay) {
+      throw new Error('两个收款码都未配置');
     }
 
-    dstCtx.putImageData(dst, 0, 0);
-    qrBox.style.display = 'block';
-    msg.className = 'msg'; msg.textContent = '解密成功（点击收款码可再次全屏）';
+    // 4. 显示当前 tab
+    if (!decrypted[currentTab]) {
+      currentTab = decrypted.wechat ? 'wechat' : 'alipay';
+      tabs.forEach(x => x.classList.toggle('active', x.dataset.target === currentTab));
+    }
+    showCurrent();
 
-    // 解密后自动全屏
-    const dataURL = canvas.toDataURL('image/png');
-    qrBox.onclick = () => openLightbox(dataURL);
-    openLightbox(dataURL);
+    // 5. 自动全屏
+    const firstSrc = decrypted[currentTab];
+    if (firstSrc) openLightbox(firstSrc);
+
   }catch(e){
     console.error(e);
     msg.className = 'msg err'; msg.textContent = '解密失败：口令错误或文件缺失';
     placeholder.style.display = 'block';
+    placeholder.textContent = '解密失败，请检查口令或确认加密文件已上传';
   }finally{
     btn.disabled = false;
   }
