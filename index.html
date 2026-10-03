@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>收款码</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
@@ -14,7 +14,6 @@
     background:#0f1115 center/cover no-repeat fixed;
     transition:background-image .6s ease;
   }
-  /* 背景遮罩，保证内容可读 */
   body::before{
     content:"";position:fixed;inset:0;
     background:linear-gradient(180deg,rgba(8,10,14,.72),rgba(8,10,14,.88));
@@ -24,7 +23,6 @@
 
   .wrap{max-width:960px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
 
-  /* ---- 通用卡片 ---- */
   .panel{
     background:rgba(24,27,34,.86);
     border:1px solid rgba(255,255,255,.08);
@@ -43,11 +41,9 @@
     content:"";width:4px;height:14px;border-radius:2px;background:#4f8cff;
   }
 
-  /* ---- 双栏布局（桌面） ---- */
   .columns{display:grid;grid-template-columns:1fr 1fr;gap:22px}
   @media(max-width:720px){ .columns{grid-template-columns:1fr} }
 
-  /* ---- 收款码区 ---- */
   .qr-area{text-align:center}
   .field{display:flex;gap:8px;margin-bottom:6px}
   input{
@@ -69,13 +65,13 @@
   .qr-box canvas{
     width:100%;max-width:300px;border-radius:14px;
     background:#fff;padding:10px;box-shadow:0 8px 28px rgba(0,0,0,.4);
+    cursor:zoom-in;
   }
   .qr-placeholder{
     margin-top:18px;padding:36px 16px;border:1px dashed rgba(255,255,255,.14);
     border-radius:14px;color:#5f6672;font-size:13px;line-height:1.7;
   }
 
-  /* ---- 其他区：折叠面板 ---- */
   details{
     border:1px solid rgba(255,255,255,.08);
     border-radius:12px;background:rgba(17,20,26,.7);
@@ -102,7 +98,6 @@
 
   .hint{font-size:12px;color:#6b7280;margin-top:16px;line-height:1.6;text-align:center}
 
-  /* 背景切换按钮 */
   .bg-btn{
     position:fixed;right:16px;bottom:16px;z-index:10;
     padding:9px 14px;border-radius:999px;font-size:12px;
@@ -111,6 +106,42 @@
     cursor:pointer;backdrop-filter:blur(6px);
   }
   .bg-btn:hover{background:rgba(36,40,50,.95)}
+
+  /* ---- 图片放大查看器 ---- */
+  .lightbox {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,.94);
+    display: flex; align-items: center; justify-content: center;
+    touch-action: none;
+  }
+  .lightbox[hidden] { display: none; }
+
+  .lightbox img {
+    max-width: 96vw;
+    max-height: 92vh;
+    width: auto;
+    height: auto;
+    transform-origin: center center;
+    transition: transform .12s ease;
+    user-select: none;
+    -webkit-user-drag: none;
+    cursor: grab;
+  }
+  .lightbox img:active { cursor: grabbing; }
+
+  .lb-toolbar {
+    position: absolute; bottom: 22px; left: 50%;
+    transform: translateX(-50%);
+    display: flex; gap: 10px;
+  }
+  .lb-toolbar button {
+    width: 46px; height: 46px; border-radius: 50%;
+    border: 0; background: rgba(255,255,255,.16);
+    color: #fff; font-size: 22px; line-height: 1;
+    backdrop-filter: blur(6px);
+    cursor: pointer;
+  }
+  .lb-toolbar button:active { background: rgba(255,255,255,.3); }
 </style>
 </head>
 <body>
@@ -183,22 +214,31 @@
 
 <button class="bg-btn" id="bgBtn">换背景</button>
 
+<!-- 图片放大查看器 -->
+<div class="lightbox" id="lightbox" hidden>
+  <img id="lightboxImg" alt="收款码">
+  <div class="lb-toolbar">
+    <button id="lbZoomIn" title="放大">＋</button>
+    <button id="lbZoomOut" title="缩小">－</button>
+    <button id="lbReset" title="重置">1:1</button>
+    <button id="lbClose" title="关闭">✕</button>
+  </div>
+</div>
+
 <script>
 /* ========== 背景：必应随机壁纸 ========== */
 const bgApis = [
-  'https://bing.img.run/1920x1080.php',        // 随机必应壁纸
-  'https://api.dujin.org/bing/1920.php',       // 备用
+  'https://bing.img.run/1920x1080.php',
+  'https://api.dujin.org/bing/1920.php',
   'https://bing.biturl.top/?resolution=1920&format=image&index=random&mkt=zh-CN'
 ];
 let bgIdx = 0;
 
 function setBg(){
-  // 用图片预加载，避免闪白
   const url = bgApis[bgIdx % bgApis.length] + (bgApis[bgIdx % bgApis.length].includes('?') ? '&' : '?') + '_t=' + Date.now();
   const img = new Image();
   img.onload = () => { document.body.style.backgroundImage = `url("${url}")`; };
   img.onerror = () => {
-    // 当前 API 失败，自动换下一个
     bgIdx++;
     if (bgIdx < bgApis.length * 2) setBg();
   };
@@ -211,7 +251,7 @@ document.getElementById('bgBtn').addEventListener('click', () => {
   setBg();
 });
 
-/* ========== 解密逻辑 ========== */
+/* ========== 工具 ========== */
 const $ = id => document.getElementById(id);
 const pwdEl = $('pwd'), btn = $('btn'), msg = $('msg'),
       qrBox = $('qrBox'), canvas = $('qrCanvas'),
@@ -269,6 +309,70 @@ function gilbertCurve(w, h){
   return order;
 }
 
+/* ========== 图片放大查看器 ========== */
+const lightbox = $('lightbox');
+const lightboxImg = $('lightboxImg');
+let lbScale = 1, lbX = 0, lbY = 0;
+let lbDragging = false, lbStartX = 0, lbStartY = 0;
+
+function updateLightbox() {
+  lightboxImg.style.transform =
+    `translate(${lbX}px, ${lbY}px) scale(${lbScale})`;
+}
+
+function openLightbox(src) {
+  lightboxImg.src = src;
+  lbScale = 1; lbX = 0; lbY = 0;
+  updateLightbox();
+  lightbox.hidden = false;
+  document.body.style.overflow = 'hidden';
+
+  lightboxImg.onload = () => {
+    const vw = window.innerWidth * 0.9;
+    const vh = window.innerHeight * 0.85;
+    const iw = lightboxImg.naturalWidth;
+    const ih = lightboxImg.naturalHeight;
+    const fit = Math.min(vw / iw, vh / ih);
+    lbScale = Math.max(1, Math.min(fit, 3));
+    updateLightbox();
+  };
+}
+
+function closeLightbox() {
+  lightbox.hidden = true;
+  document.body.style.overflow = '';
+}
+
+$('lbZoomIn').onclick = () => {
+  lbScale = Math.min(lbScale * 1.25, 6);
+  updateLightbox();
+};
+$('lbZoomOut').onclick = () => {
+  lbScale = Math.max(lbScale / 1.25, 0.5);
+  updateLightbox();
+};
+$('lbReset').onclick = () => {
+  lbScale = 1; lbX = 0; lbY = 0;
+  updateLightbox();
+};
+$('lbClose').onclick = closeLightbox;
+
+lightboxImg.addEventListener('pointerdown', e => {
+  lbDragging = true;
+  lbStartX = e.clientX - lbX;
+  lbStartY = e.clientY - lbY;
+  lightboxImg.setPointerCapture(e.pointerId);
+});
+lightboxImg.addEventListener('pointermove', e => {
+  if (!lbDragging) return;
+  lbX = e.clientX - lbStartX;
+  lbY = e.clientY - lbStartY;
+  updateLightbox();
+});
+lightboxImg.addEventListener('pointerup', () => { lbDragging = false; });
+lightboxImg.addEventListener('pointercancel', () => { lbDragging = false; });
+
+/* ========== 解密 ========== */
 async function unlock(){
   const pwd = pwdEl.value;
   if (!pwd){ msg.className='msg err'; msg.textContent='请输入口令'; return; }
@@ -316,7 +420,12 @@ async function unlock(){
 
     dstCtx.putImageData(dst, 0, 0);
     qrBox.style.display = 'block';
-    msg.className = 'msg'; msg.textContent = '解密成功';
+    msg.className = 'msg'; msg.textContent = '解密成功（点击收款码可再次全屏）';
+
+    // 解密后自动全屏
+    const dataURL = canvas.toDataURL('image/png');
+    qrBox.onclick = () => openLightbox(dataURL);
+    openLightbox(dataURL);
   }catch(e){
     console.error(e);
     msg.className = 'msg err'; msg.textContent = '解密失败：口令错误或文件缺失';
