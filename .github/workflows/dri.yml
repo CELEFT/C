@@ -12,22 +12,28 @@ jobs:
     timeout-minutes: 180
 
     steps:
+      # 1. 检出代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. 下载 Mesa 26.3.1 源码
       - name: Download Mesa 26.3.1 source
         run: |
           wget https://archive.mesa3d.org/mesa-26.3.1.tar.xz
           tar -xf mesa-26.3.1.tar.xz
           mv mesa-26.3.1 mesa-source
 
+      # 3. 安装 Clang 21 / LLVM 21（Ubuntu 26.04 官方仓库自带）
       - name: Install Clang 21 & LLVM 21
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang-21 llvm-21 lld-21 libclang-21-dev libclang-cpp21-dev \
-            libllvm21 llvm-21-dev
+            clang-21 llvm-21 lld-21 \
+            libclang-21-dev libclang-cpp21-dev \
+            libllvm21 llvm-21-dev \
+            libclc-21 libclc-21-dev
 
+      # 4. 将 Clang 21 / LLVM 21 设为默认
       - name: Set Clang 21 as default
         run: |
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-21 210
@@ -36,27 +42,43 @@ jobs:
           clang --version
           llvm-config --version
 
-      - name: Install Mesa build dependencies
+      # 5. 核心构建依赖（缺任何一个都可能导致 Meson 配置失败）
+      - name: Install core Mesa build dependencies
         run: |
           sudo apt-get install -y --no-install-recommends \
             meson ninja-build pkg-config cmake \
-            python3-pip python3-mako python3-yaml \
+            python3-pip python3-mako python3-yaml python3-setuptools \
             bison flex byacc \
-            libdrm-dev libglvnd-dev libelf-dev zlib1g-dev libzstd-dev \
-            libx11-dev libxext-dev libxfixes-dev libxcb-glx0-dev \
-            libxcb-shm0-dev libxcb-dri2-0-dev libxcb-dri3-dev \
-            libxcb-present-dev libxshmfence-dev libxxf86vm-dev \
-            libxrandr-dev x11proto-dev \
-            libwayland-dev wayland-protocols \
-            glslang-tools   # ✅ 修复：Meson 所需的 glslangValidator 工具
+            libdrm-dev libglvnd-dev libglvnd-core-dev \
+            libelf-dev zlib1g-dev libzstd-dev libexpat1-dev \
+            libx11-dev libxext-dev libxfixes-dev libx11-xcb-dev \
+            libxcb-glx0-dev libxcb-shm0-dev libxcb-dri2-0-dev \
+            libxcb-dri3-dev libxcb-present-dev libxcb-randr0-dev \
+            libxcb-sync-dev libxcb-xfixes0-dev \
+            libxshmfence-dev libxxf86vm-dev libxrandr-dev libxkbcommon-dev \
+            x11proto-dev linux-libc-dev \
+            libwayland-dev wayland-protocols libwayland-egl-backend-dev \
+            glslang-tools spirv-tools \
+            libvulkan-dev
 
-          python3 -c "import mako; print('Mako OK:', mako.__version__)" || pip3 install mako
+      # 6. 可选增强依赖（ARM64 特性或工具链补充，失败不阻塞）
+      - name: Install optional Mesa dependencies (best-effort)
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            directx-headers-dev flatbuffers-compiler libflatbuffers-dev \
+            libxtensor-dev libsensors-dev valgrind \
+            python3-ply python3-pycparser python3-packaging \
+            libllvmspirvlib-21-dev llvm-spirv-21 \
+            || echo "::warning::部分可选依赖未安装成功，继续构建"
 
+      # 7. Meson 配置（显式指定 Clang 21）
       - name: Meson setup
         working-directory: mesa-source
         env:
           CC: clang-21
           CXX: clang++-21
+          LLVM_CONFIG: /usr/bin/llvm-config-21
         run: |
           meson setup build/ \
             --prefix="$PWD/../install" \
@@ -80,17 +102,20 @@ jobs:
             -Dbuildtype=release \
             -Db_ndebug=true
 
+      # 8. 编译
       - name: Ninja build
         working-directory: mesa-source
         run: ninja -C build/ -j$(nproc)
 
+      # 9. 安装到本地目录
       - name: Install Mesa
         working-directory: mesa-source
         run: ninja -C build/ install
 
+      # 10. 上传构建产物
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mesa-26.3.1-clang21-ubuntu26-aarch64
           path: install/
-          retention-days: 30
+          retention-days: 7
