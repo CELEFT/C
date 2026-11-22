@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, master ]
   pull_request:
-  workflow_dispatch:   # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   build-mesa:
@@ -12,18 +12,15 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      # 1. 检出代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. 下载 Mesa 26.3.1 源码
       - name: Download Mesa 26.3.1 source
         run: |
           wget https://archive.mesa3d.org/mesa-26.3.1.tar.xz
           tar -xf mesa-26.3.1.tar.xz
           mv mesa-26.3.1 mesa-source
 
-      # 3. 安装 Clang 21 与 LLVM 21（Ubuntu 26.04 官方仓库自带）
       - name: Install Clang 21 & LLVM 21
         run: |
           sudo apt-get update
@@ -31,7 +28,6 @@ jobs:
             clang-21 llvm-21 lld-21 libclang-21-dev libclang-cpp21-dev \
             libllvm21 llvm-21-dev
 
-      # 4. 将 Clang 21 设为默认编译器
       - name: Set Clang 21 as default
         run: |
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-21 210
@@ -40,7 +36,6 @@ jobs:
           clang --version
           llvm-config --version
 
-      # 5. 安装 Mesa 构建依赖（已修正 xorgproto → x11proto-dev）
       - name: Install Mesa build dependencies
         run: |
           sudo apt-get install -y --no-install-recommends \
@@ -52,11 +47,11 @@ jobs:
             libxcb-shm0-dev libxcb-dri2-0-dev libxcb-dri3-dev \
             libxcb-present-dev libxshmfence-dev libxxf86vm-dev \
             libxrandr-dev x11proto-dev \
-            libwayland-dev wayland-protocols
+            libwayland-dev wayland-protocols \
+            glslang-tools   # ✅ 修复：Meson 所需的 glslangValidator 工具
 
           python3 -c "import mako; print('Mako OK:', mako.__version__)" || pip3 install mako
 
-      # 6. 进入 Mesa 源码目录并配置 Meson（显式指定 Clang 21）
       - name: Meson setup
         working-directory: mesa-source
         env:
@@ -85,17 +80,14 @@ jobs:
             -Dbuildtype=release \
             -Db_ndebug=true
 
-      # 7. 编译
       - name: Ninja build
         working-directory: mesa-source
         run: ninja -C build/ -j$(nproc)
 
-      # 8. 安装到本地目录
       - name: Install Mesa
         working-directory: mesa-source
         run: ninja -C build/ install
 
-      # 9. 上传构建产物
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
