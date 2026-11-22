@@ -42,7 +42,7 @@ jobs:
           clang --version
           llvm-config --version
 
-      # 5. 核心构建依赖（缺任何一个都可能导致 Meson 配置失败）
+      # 5. 安装核心 Mesa 构建依赖
       - name: Install core Mesa build dependencies
         run: |
           sudo apt-get install -y --no-install-recommends \
@@ -59,9 +59,29 @@ jobs:
             x11proto-dev linux-libc-dev \
             libwayland-dev wayland-protocols libwayland-egl-backend-dev \
             glslang-tools spirv-tools \
-            libvulkan-dev
+            libvulkan-dev \
+            wget gpg
 
-      # 6. 可选增强依赖（ARM64 特性或工具链补充，失败不阻塞）
+      # 6. 添加 KDE Neon 源并升级 libwayland-bin 到 1.26.0
+      #    wayland-protocols 1.49 要求 wayland-scanner >= 1.25.0
+      #    Ubuntu 26.04 官方仓库只有 1.24.0，此处从 Neon 获取新版
+      - name: Add KDE Neon repo & upgrade libwayland-bin
+        run: |
+          # 导入 Neon 签名密钥
+          wget -qO- https://archive.neon.kde.org/public.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/neon.gpg
+
+          # 添加 Neon 26.04 稳定源（仅 main 组件）
+          echo "deb http://archive.neon.kde.org/resolute/stable/ resolute main" | \
+            sudo tee /etc/apt/sources.list.d/neon.list
+
+          # 只升级 libwayland-bin，避免拉取 Neon 的其他包
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends -t resolute libwayland-bin
+
+          # 验证版本（应 >= 1.25.0）
+          wayland-scanner --version
+
+      # 7. 可选增强依赖（ARM64 特性或工具链补充，失败不阻塞）
       - name: Install optional Mesa dependencies (best-effort)
         continue-on-error: true
         run: |
@@ -72,7 +92,7 @@ jobs:
             libllvmspirvlib-21-dev llvm-spirv-21 \
             || echo "::warning::部分可选依赖未安装成功，继续构建"
 
-      # 7. Meson 配置（显式指定 Clang 21）
+      # 8. Meson 配置（显式指定 Clang 21）
       - name: Meson setup
         working-directory: mesa-source
         env:
@@ -102,20 +122,20 @@ jobs:
             -Dbuildtype=release \
             -Db_ndebug=true
 
-      # 8. 编译
+      # 9. 编译
       - name: Ninja build
         working-directory: mesa-source
         run: ninja -C build/ -j$(nproc)
 
-      # 9. 安装到本地目录
+      # 10. 安装到本地目录
       - name: Install Mesa
         working-directory: mesa-source
         run: ninja -C build/ install
 
-      # 10. 上传构建产物
+      # 11. 上传构建产物
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mesa-26.3.1-clang21-ubuntu26-aarch64
           path: install/
-          retention-days: 7
+          retention-days: 30
