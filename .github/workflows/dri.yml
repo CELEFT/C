@@ -23,7 +23,7 @@ jobs:
           tar -xf mesa-26.3.1.tar.xz
           mv mesa-26.3.1 mesa-source
 
-      # 3. 安装 Clang 21 / LLVM 21（Ubuntu 26.04 官方仓库自带）
+      # 3. 安装 Clang 21 / LLVM 21
       - name: Install Clang 21 & LLVM 21
         run: |
           sudo apt-get update
@@ -42,12 +42,13 @@ jobs:
           clang --version
           llvm-config --version
 
-      # 5. 安装核心 Mesa 构建依赖
+      # 5. 安装核心构建依赖（基于 Debian Mesa 打包清单，适配 Ubuntu 26.04）
       - name: Install core Mesa build dependencies
         run: |
           sudo apt-get install -y --no-install-recommends \
             meson ninja-build pkg-config cmake \
-            python3-pip python3-mako python3-yaml python3-setuptools \
+            python3-pip python3-mako python3-yaml python3-ply \
+            python3-pycparser python3-setuptools \
             bison flex byacc \
             libdrm-dev libglvnd-dev libglvnd-core-dev \
             libelf-dev zlib1g-dev libzstd-dev libexpat1-dev \
@@ -57,28 +58,28 @@ jobs:
             libxcb-sync-dev libxcb-xfixes0-dev \
             libxshmfence-dev libxxf86vm-dev libxrandr-dev libxkbcommon-dev \
             x11proto-dev linux-libc-dev \
-            libwayland-dev wayland-protocols libwayland-egl-backend-dev \
+            libwayland-dev libwayland-egl-backend-dev \
             glslang-tools spirv-tools \
             libvulkan-dev \
             wget gpg
 
       # 6. 添加 KDE Neon 源并升级 libwayland-bin 到 1.26.0
       #    wayland-protocols 1.49 要求 wayland-scanner >= 1.25.0
-      #    Ubuntu 26.04 官方仓库只有 1.24.0，此处从 Neon 获取新版
+      #    Ubuntu 26.04 官方仓库只有 1.24.0，从 Neon 获取新版
       - name: Add KDE Neon repo & upgrade libwayland-bin
         run: |
           # 导入 Neon 签名密钥
           wget -qO- https://archive.neon.kde.org/public.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/neon.gpg
 
-          # 添加 Neon 26.04 稳定源（仅 main 组件）
-          echo "deb http://archive.neon.kde.org/resolute/stable/ resolute main" | \
+          # 正确的源格式：stable 目录，resolute 套件
+          echo "deb http://archive.neon.kde.org/stable resolute main" | \
             sudo tee /etc/apt/sources.list.d/neon.list
 
-          # 只升级 libwayland-bin，避免拉取 Neon 的其他包
           sudo apt-get update
+          # 仅从 resolute 套件安装 libwayland-bin，避免拉取 Neon 的其他包
           sudo apt-get install -y --no-install-recommends -t resolute libwayland-bin
 
-          # 验证版本（应 >= 1.25.0）
+          # 验证版本应 >= 1.25.0
           wayland-scanner --version
 
       # 7. 可选增强依赖（ARM64 特性或工具链补充，失败不阻塞）
@@ -88,7 +89,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             directx-headers-dev flatbuffers-compiler libflatbuffers-dev \
             libxtensor-dev libsensors-dev valgrind \
-            python3-ply python3-pycparser python3-packaging \
+            python3-packaging \
             libllvmspirvlib-21-dev llvm-spirv-21 \
             || echo "::warning::部分可选依赖未安装成功，继续构建"
 
@@ -138,4 +139,4 @@ jobs:
         with:
           name: mesa-26.3.1-clang21-ubuntu26-aarch64
           path: install/
-          retention-days: 30
+          retention-days: 7
