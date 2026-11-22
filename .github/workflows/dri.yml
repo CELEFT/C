@@ -4,24 +4,26 @@ on:
   push:
     branches: [ main, master ]
   pull_request:
-  workflow_dispatch:
+  workflow_dispatch:   # 允许手动触发
 
 jobs:
   build-mesa:
-    runs-on: ubuntu-26.04-arm   # ✅ 已切换为 Ubuntu 26.04 ARM
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 180
 
     steps:
+      # 1. 检出代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. 下载 Mesa 26.3.1 源码
       - name: Download Mesa 26.3.1 source
         run: |
           wget https://archive.mesa3d.org/mesa-26.3.1.tar.xz
           tar -xf mesa-26.3.1.tar.xz
           mv mesa-26.3.1 mesa-source
 
-      # Ubuntu 26.04 仓库自带 clang-21 / llvm-21，直接安装即可
+      # 3. 安装 Clang 21 与 LLVM 21（Ubuntu 26.04 官方仓库自带）
       - name: Install Clang 21 & LLVM 21
         run: |
           sudo apt-get update
@@ -29,6 +31,7 @@ jobs:
             clang-21 llvm-21 lld-21 libclang-21-dev libclang-cpp21-dev \
             libllvm21 llvm-21-dev
 
+      # 4. 将 Clang 21 设为默认编译器
       - name: Set Clang 21 as default
         run: |
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-21 210
@@ -37,6 +40,7 @@ jobs:
           clang --version
           llvm-config --version
 
+      # 5. 安装 Mesa 构建依赖（已修正 xorgproto → x11proto-dev）
       - name: Install Mesa build dependencies
         run: |
           sudo apt-get install -y --no-install-recommends \
@@ -47,18 +51,20 @@ jobs:
             libx11-dev libxext-dev libxfixes-dev libxcb-glx0-dev \
             libxcb-shm0-dev libxcb-dri2-0-dev libxcb-dri3-dev \
             libxcb-present-dev libxshmfence-dev libxxf86vm-dev \
-            libxrandr-dev xorgproto \
+            libxrandr-dev x11proto-dev \
             libwayland-dev wayland-protocols
 
           python3 -c "import mako; print('Mako OK:', mako.__version__)" || pip3 install mako
 
+      # 6. 进入 Mesa 源码目录并配置 Meson（显式指定 Clang 21）
       - name: Meson setup
+        working-directory: mesa-source
         env:
           CC: clang-21
           CXX: clang++-21
         run: |
           meson setup build/ \
-            --prefix="$PWD/install" \
+            --prefix="$PWD/../install" \
             -Dplatforms=x11,wayland \
             -Dgallium-drivers=freedreno,zink,llvmpipe \
             -Dgallium-va=disabled \
@@ -79,15 +85,20 @@ jobs:
             -Dbuildtype=release \
             -Db_ndebug=true
 
+      # 7. 编译
       - name: Ninja build
+        working-directory: mesa-source
         run: ninja -C build/ -j$(nproc)
 
+      # 8. 安装到本地目录
       - name: Install Mesa
+        working-directory: mesa-source
         run: ninja -C build/ install
 
+      # 9. 上传构建产物
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mesa-26.3.1-clang21-ubuntu26-aarch64
           path: install/
-          retention-days: 90
+          retention-days: 30
