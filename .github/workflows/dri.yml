@@ -1,54 +1,122 @@
-name: Build Mesa 26.3.1 with Clang 21 (Ubuntu 26.04 ARM)
+name: Build Mesa (Release + Daily Dev)
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
+  schedule:
+    - cron: '0 2 * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: '构建模式'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - dev
+      version:
+        description: '版本号 / tag / 分支（release 模式必填，如 26.3.1；dev 模式留空默认 main）'
+        required: false
+        default: '26.3.1'
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  MESA_REPO: https://gitlab.freedesktop.org/mesa/mesa.git
 
 jobs:
-  build-mesa:
+  build:
     runs-on: ubuntu-26.04-arm
-    timeout-minutes: 180
+    timeout-minutes: 240
 
     steps:
-      # 1. 检出代码
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # 2. 下载 Mesa 26.3.1 源码
-      - name: Download Mesa 26.3.1 source
+      # ── 1. 解析构建模式与目标 ────────────────────────────────
+      - name: Resolve build mode & target
+        id: target
         run: |
-          wget https://archive.mesa3d.org/mesa-26.3.1.tar.xz
-          tar -xf mesa-26.3.1.tar.xz
-          mv mesa-26.3.1 mesa-source
+          MODE="${{ github.event.inputs.mode || 'dev' }}"
+          DATE=$(date +%Y%m%d)
+          if [ "$MODE" = "release" ]; then
+            VER_INPUT="${{ github.event.inputs.version }}"
+            VER_INPUT="${VER_INPUT#v}"
+            if [[ "$VER_INPUT" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+              CLONE_REF="mesa-${VER_INPUT}"
+            else
+              CLONE_REF="${VER_INPUT}"
+            fi
+          else
+            CLONE_REF="main"
+          fi
+          echo "mode=${MODE}"           >> $GITHUB_OUTPUT
+          echo "clone_ref=${CLONE_REF}" >> $GITHUB_OUTPUT
+          echo "date=${DATE}"           >> $GITHUB_OUTPUT
 
-      # 3. 安装 Clang 21 / LLVM 21
+      # ── 2. 克隆源码（递归子模块） ────────────────────────────
+      - name: Clone Mesa source with submodules
+        run: |
+          REF="${{ steps.target.outputs.clone_ref }}"
+          git clone --recurse-submodules --depth 1 --branch "$REF" \
+            "${{ env.MESA_REPO }}" mesa-source \
+          || git clone --recurse-submodules "${{ env.MESA_REPO }}" mesa-source
+          cd mesa-source
+          git submodule update --init --recursive
+          echo "HEAD: $(git log -1 --format='%H %s')"
+
+      # ── 3. 读取真实版本号 ────────────────────────────────────
+      - name: Detect Mesa version
+        id: mesa_ver
+        working-directory: mesa-source
+        run: |
+          if [ -f VERSION ]; then
+            MV=$(tr -d '[:space:]' < VERSION)
+          else
+            MV=$(grep -oP "version\s*:\s*'\K[^']+" meson.build | head -1)
+          fi
+          echo "version=${MV}" >> $GITHUB_OUTPUT
+          echo "Detected Mesa version: ${MV}"
+
+      # ── 4. 生成 tag / title ──────────────────────────────────
+      # Dev：固定 tag = mesa-dev-latest，覆盖同一 Release，标题带版本号+日期
+      # Release：tag = mesa-<version>，覆盖同版本 Release
+      - name: Compose release tag & title
+        id: release
+        run: |
+          MODE="${{ steps.target.outputs.mode }}"
+          MV="${{ steps.mesa_ver.outputs.version }}"
+          DATE="${{ steps.target.outputs.date }}"
+          if [ "$MODE" = "release" ]; then
+            TAG="mesa-${MV}"
+            TITLE="Mesa ${MV} (Release)"
+            PRE="false"
+          else
+            TAG="mesa-dev-latest"
+            TITLE="Mesa Dev ${MV} (${DATE})"
+            PRE="true"
+          fi
+          echo "tag=${TAG}"        >> $GITHUB_OUTPUT
+          echo "title=${TITLE}"    >> $GITHUB_OUTPUT
+          echo "prerelease=${PRE}" >> $GITHUB_OUTPUT
+
+      # ── 5. Clang 21 / LLVM 21 ────────────────────────────────
       - name: Install Clang 21 & LLVM 21
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang-21 llvm-21 lld-21 \
             libclang-21-dev libclang-cpp21-dev \
-            libllvm21 llvm-21-dev \
-            libclc-21 libclc-21-dev
-
-      # 4. 将 Clang 21 / LLVM 21 设为默认
-      - name: Set Clang 21 as default
-        run: |
+            libllvm21 llvm-21-dev libclc-21 libclc-21-dev
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-21 210
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-21 210
           sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-21 210
-          clang --version
-          llvm-config --version
+          clang --version && llvm-config --version
 
-      # 5. 安装核心构建依赖（基于 Debian Mesa 打包清单，适配 Ubuntu 26.04）
+      # ── 6. 核心依赖 ──────────────────────────────────────────
       - name: Install core Mesa build dependencies
         run: |
           sudo apt-get install -y --no-install-recommends \
             meson ninja-build pkg-config cmake \
-            python3-pip python3-mako python3-yaml python3-ply \
-            python3-pycparser python3-setuptools \
+            python3-pip python3-mako python3-yaml python3-setuptools \
             bison flex byacc \
             libdrm-dev libglvnd-dev libglvnd-core-dev \
             libelf-dev zlib1g-dev libzstd-dev libexpat1-dev \
@@ -59,41 +127,32 @@ jobs:
             libxshmfence-dev libxxf86vm-dev libxrandr-dev libxkbcommon-dev \
             x11proto-dev linux-libc-dev \
             libwayland-dev libwayland-egl-backend-dev \
-            glslang-tools spirv-tools \
-            libvulkan-dev \
+            glslang-tools spirv-tools libvulkan-dev \
             wget gpg
 
-      # 6. 添加 KDE Neon 源并升级 libwayland-bin 到 1.26.0
-      #    wayland-protocols 1.49 要求 wayland-scanner >= 1.25.0
-      #    Ubuntu 26.04 官方仓库只有 1.24.0，从 Neon 获取新版
-      - name: Add KDE Neon repo & upgrade libwayland-bin
+      # ── 7. wayland-scanner ≥ 1.25.0 ──────────────────────────
+      - name: Upgrade libwayland-bin from KDE Neon
         run: |
-          # 导入 Neon 签名密钥
-          wget -qO- https://archive.neon.kde.org/public.key | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/neon.gpg
-
-          # 正确的源格式：stable 目录，resolute 套件
-          echo "deb http://archive.neon.kde.org/stable resolute main" | \
-            sudo tee /etc/apt/sources.list.d/neon.list
-
+          wget -qO- https://archive.neon.kde.org/public.key \
+            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/neon.gpg
+          echo "deb http://archive.neon.kde.org/stable resolute main" \
+            | sudo tee /etc/apt/sources.list.d/neon.list
           sudo apt-get update
-          # 仅从 resolute 套件安装 libwayland-bin，避免拉取 Neon 的其他包
           sudo apt-get install -y --no-install-recommends -t resolute libwayland-bin
-
-          # 验证版本应 >= 1.25.0
           wayland-scanner --version
 
-      # 7. 可选增强依赖（ARM64 特性或工具链补充，失败不阻塞）
-      - name: Install optional Mesa dependencies (best-effort)
+      # ── 8. 可选依赖（失败不阻塞） ─────────────────────────────
+      - name: Install optional dependencies (best-effort)
         continue-on-error: true
         run: |
           sudo apt-get install -y --no-install-recommends \
             directx-headers-dev flatbuffers-compiler libflatbuffers-dev \
             libxtensor-dev libsensors-dev valgrind \
-            python3-packaging \
+            python3-ply python3-pycparser python3-packaging \
             libllvmspirvlib-21-dev llvm-spirv-21 \
-            || echo "::warning::部分可选依赖未安装成功，继续构建"
+          || echo "::warning::部分可选依赖未安装，继续构建"
 
-      # 8. Meson 配置（显式指定 Clang 21）
+      # ── 9. Meson 配置 ────────────────────────────────────────
       - name: Meson setup
         working-directory: mesa-source
         env:
@@ -123,20 +182,34 @@ jobs:
             -Dbuildtype=release \
             -Db_ndebug=true
 
-      # 9. 编译
+      # ── 10. 编译 & 安装 ──────────────────────────────────────
       - name: Ninja build
         working-directory: mesa-source
         run: ninja -C build/ -j$(nproc)
 
-      # 10. 安装到本地目录
       - name: Install Mesa
         working-directory: mesa-source
         run: ninja -C build/ install
 
-      # 11. 上传构建产物
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      # ── 11. 发布（直接覆盖同一 Release） ──────────────────────
+      - name: Publish to GitHub Release (overwrite)
+        uses: softprops/action-gh-release@v2
         with:
-          name: mesa-26.3.1-clang21-ubuntu26-aarch64
-          path: install/
-          retention-days: 7
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: ${{ steps.release.outputs.title }}
+          prerelease: ${{ steps.release.outputs.prerelease }}
+          # 关键：先清空该 Release 的全部旧资产，再上传本次产物
+          overwrite_files: true
+          # 同 tag 已存在时直接更新该 Release，而不是报错
+          fail_on_unmatched_files: false
+          make_latest: ${{ steps.target.outputs.mode == 'release' && 'true' || 'false' }}
+          body: |
+            **发布类型**: ${{ steps.target.outputs.mode }}
+            **Mesa 版本**: ${{ steps.mesa_ver.outputs.version }}
+            **源码引用**: `${{ steps.target.outputs.clone_ref }}`
+            **构建日期**: ${{ steps.target.outputs.date }}
+            **触发方式**: `${{ github.event_name }}`
+            **构建提交**: `${{ github.sha }}`
+            **构建时间**: ${{ github.event.head_commit.timestamp || github.run_started_at }}
+          files: install/**/*
+          token: ${{ secrets.GITHUB_TOKEN }}
