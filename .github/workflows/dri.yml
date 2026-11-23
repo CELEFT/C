@@ -32,12 +32,10 @@ jobs:
           if [ -n "$INPUT" ]; then
             VER="$INPUT"
           else
-            # 从 archive.mesa3d.org 目录列表自动检测最新稳定版
-            # 过滤掉 -rc 版本，只保留正式 release
             VER=$(curl -s "${{ env.MESA_ARCHIVE }}/" \
                   | grep -oP 'mesa-\K[0-9]+\.[0-9]+\.[0-9]+(?=\.tar\.xz")' \
                   | sort -V | tail -1)
-            echo "Auto-detected latest stable from archive.mesa3d.org: ${VER}"
+            echo "Auto-detected latest stable: ${VER}"
           fi
           echo "version=${VER}" >> $GITHUB_OUTPUT
 
@@ -65,29 +63,25 @@ jobs:
           fi
           echo "date=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
 
-      # ── Release：从 archive.mesa3d.org 下载 tar.xz + sig ──
+      # ── Release：archive 下载 + GPG 校验 ────────────────────
       - name: Download release tarball from archive
         if: matrix.mode == 'release'
         run: |
           V="${{ steps.target.outputs.version }}"
           BASE="${{ env.MESA_ARCHIVE }}/mesa-${V}.tar.xz"
-          echo "Downloading ${BASE}"
-          wget -q "${BASE}"        -O mesa-source.tar.xz
-          wget -q "${BASE}.sig"    -O mesa-source.tar.xz.sig
+          wget -q "${BASE}"     -O mesa-source.tar.xz
+          wget -q "${BASE}.sig" -O mesa-source.tar.xz.sig
           ls -lh mesa-source.tar.xz mesa-source.tar.xz.sig
 
-      # ── Release：GPG 签名校验 ──────────────────────────────
       - name: Verify GPG signature
         if: matrix.mode == 'release'
         run: |
-          # 获取 Mesa 发布维护者公钥
           wget -qO release-keys.asc \
             "https://gitlab.freedesktop.org/mesa/mesa/-/raw/main/docs/release-maintainers-keys.asc"
-          gpg --import release-keys.asc 2>/dev/null || \
-            gpg --keyserver keyserver.ubuntu.com --recv-keys $(gpg --show-keys release-keys.asc 2>/dev/null | grep -oP '[A-F0-9]{40}' | head -1)
+          gpg --import release-keys.asc 2>/dev/null || true
           gpg --verify mesa-source.tar.xz.sig mesa-source.tar.xz \
-            && echo "::notice::GPG signature verified successfully" \
-            || echo "::warning::GPG signature verification failed, continuing anyway"
+            && echo "::notice::GPG signature verified" \
+            || echo "::warning::GPG signature verification failed, continuing"
 
       - name: Extract release tarball
         if: matrix.mode == 'release'
@@ -96,7 +90,7 @@ jobs:
           tar -xf mesa-source.tar.xz
           mv "mesa-${V}" mesa-source
 
-      # ── Dev：从 Git main 克隆 ─────────────────────────────
+      # ── Dev：Git main 克隆 ─────────────────────────────────
       - name: Clone dev source from Git
         if: matrix.mode == 'dev'
         id: clone
@@ -199,30 +193,42 @@ jobs:
           ninja -C build/ -j$(nproc)
           ninja -C build/ install
 
+      # ── 打包 + 元数据（所有值无空格） ──────────────────────
       - name: Package
         run: |
           PKG="${{ steps.pkg.outputs.name }}"
+          MODE="${{ matrix.mode }}"
+          V="${{ steps.ver.outputs.version }}"
+          SRC="${{ steps.target.outputs.source }}"
+          DATE="${{ steps.target.outputs.date }}"
+          MESA_COMMIT="${{ steps.clone.outputs.commit }}"
+          [ -z "$MESA_COMMIT" ] && MESA_COMMIT="tarball"
+
           cat > install/BUILD_INFO <<EOF
-          Mesa version : ${{ steps.ver.outputs.version }}
-          Mode         : ${{ matrix.mode }}
-          Source       : ${{ steps.target.outputs.source }}
-          Mesa commit  : ${{ steps.clone.outputs.commit || 'official release tarball' }}
-          Build date   : ${{ steps.target.outputs.date }}
+          Mesa version : ${V}
+          Mode         : ${MODE}
+          Source       : ${SRC}
+          Mesa commit  : ${MESA_COMMIT}
+          Build date   : ${DATE}
           Built with   : clang-21 / LLVM 21
           Arch         : aarch64
           EOF
           mv install "$PKG"
           tar --owner=0 --group=0 --numeric-owner -cf - "$PKG" | xz -T0 -6 > "${PKG}.tar.xz"
           sha256sum "${PKG}.tar.xz" > "${PKG}.tar.xz.sha256"
-          cat > "meta-${{ matrix.mode }}.txt" <<EOF
-          MODE=${{ matrix.mode }}
-          VERSION=${{ steps.ver.outputs.version }}
-          SOURCE=${{ steps.target.outputs.source }}
-          COMMIT=${{ steps.clone.outputs.commit || 'official release tarball' }}
-          DATE=${{ steps.target.outputs.date }}
-          PKG=$PKG
+
+          # 所有值均无空格，source 时不会误执行
+          cat > "meta-${MODE}.txt" <<EOF
+          MODE=${MODE}
+          VERSION=${V}
+          SOURCE=${SRC}
+          COMMIT=${MESA_COMMIT}
+          DATE=${DATE}
+          PKG=${PKG}
           SIZE=$(du -h "${PKG}.tar.xz" | cut -f1)
           EOF
+          echo "--- meta-${MODE}.txt ---"
+          cat "meta-${MODE}.txt"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -248,14 +254,23 @@ jobs:
         run: |
           R_VER=""; R_PKG=""; R_SIZE=""; R_COMMIT=""; R_DATE=""
           D_VER=""; D_PKG=""; D_SIZE=""; D_COMMIT=""; D_DATE=""
+
+          # 用 grep + cut 解析，不 source，彻底避免特殊字符问题
           for f in artifacts/meta-*.txt; do
-            source "$f"
+            [ -f "$f" ] || continue
+            MODE=$(grep '^MODE='   "$f" | cut -d= -f2-)
+            V=$(   grep '^VERSION=' "$f" | cut -d= -f2-)
+            C=$(   grep '^COMMIT=' "$f" | cut -d= -f2-)
+            D=$(   grep '^DATE='   "$f" | cut -d= -f2-)
+            P=$(   grep '^PKG='    "$f" | cut -d= -f2-)
+            S=$(   grep '^SIZE='   "$f" | cut -d= -f2-)
             if [ "$MODE" = "release" ]; then
-              R_VER="$VERSION"; R_PKG="$PKG"; R_SIZE="$SIZE"; R_COMMIT="$COMMIT"; R_DATE="$DATE"
+              R_VER="$V"; R_PKG="$P"; R_SIZE="$S"; R_COMMIT="$C"; R_DATE="$D"
             else
-              D_VER="$VERSION"; D_PKG="$PKG"; D_SIZE="$SIZE"; D_COMMIT="$COMMIT"; D_DATE="$DATE"
+              D_VER="$V"; D_PKG="$P"; D_SIZE="$S"; D_COMMIT="$C"; D_DATE="$D"
             fi
           done
+
           {
             echo "| 项 | Release | Dev |"
             echo "|---|---|---|"
@@ -269,6 +284,7 @@ jobs:
             echo "**架构**: aarch64  "
             echo "**编译器**: clang-21 / LLVM 21"
           } > body.md
+          cat body.md
           echo "file=body.md" >> $GITHUB_OUTPUT
 
       - name: Publish
