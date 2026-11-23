@@ -2,7 +2,7 @@ name: Build Mesa (Release / Dev / All)
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * *'          # 每天 UTC 02:00 自动构建 Release + Dev
   workflow_dispatch:
     inputs:
       mode:
@@ -35,17 +35,39 @@ jobs:
       version: ${{ steps.pick.outputs.version }}
     steps:
       - id: pick
+        env:
+          GH_INPUT_MODE: ${{ github.event.inputs.mode }}
+          GH_INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          MODE="${{ github.event.inputs.mode || 'dev' }}"
-          VER="${{ github.event.inputs.version || '26.3.1' }}"
+          # 定时触发无 inputs → 默认 all（Release + Dev 全量）
+          MODE="${GH_INPUT_MODE:-all}"
           case "$MODE" in
             release) MODES='["release"]' ;;
             dev)     MODES='["dev"]' ;;
             all)     MODES='["release","dev"]' ;;
             *)       MODES='["dev"]' ;;
           esac
-          echo "modes=${MODES}"   >> $GITHUB_OUTPUT
-          echo "version=${VER}"   >> $GITHUB_OUTPUT
+
+          # 需要 Release 时确定版本号
+          if [[ "$MODES" == *release* ]]; then
+            if [ -n "$GH_INPUT_VERSION" ]; then
+              VER="$GH_INPUT_VERSION"
+            else
+              # 定时触发：自动获取最新稳定 tag（过滤 rc/beta，按版本排序取最大）
+              VER=$(git ls-remote --tags --refs \
+                      https://gitlab.freedesktop.org/mesa/mesa.git 'mesa-*' \
+                    | awk -F/ '{print $NF}' \
+                    | grep -E '^mesa-[0-9]+\.[0-9]+(\.[0-9]+)?$' \
+                    | sort -V | tail -1 \
+                    | sed 's/^mesa-//')
+              echo "Auto-detected latest stable: ${VER}"
+            fi
+          else
+            VER=""
+          fi
+
+          echo "modes=${MODES}" >> $GITHUB_OUTPUT
+          echo "version=${VER}" >> $GITHUB_OUTPUT
 
   # ── 1. 构建（每个模式一个并行 job） ───────────────────────
   build:
@@ -104,6 +126,8 @@ jobs:
           echo "Detected Mesa version: ${MV}"
 
       # ── 1.4 生成 tag / title ──────────────────────────────
+      # Dev：固定 tag = mesa-dev-latest，覆盖同一 Release
+      # Release：tag = mesa-<version>，覆盖同版本 Release
       - name: Compose release tag & title
         id: release
         run: |
@@ -216,15 +240,17 @@ jobs:
         working-directory: mesa-source
         run: ninja -C build/ install
 
-      # ── 1.11 发布（覆盖同一 Release） ──────────────────────
+      # ── 1.11 发布（覆盖同一 Release，仅保留最新产物） ───────
       - name: Publish to GitHub Release (overwrite)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           name: ${{ steps.release.outputs.title }}
           prerelease: ${{ steps.release.outputs.prerelease }}
+          # 先清空该 Release 的全部旧资产，再上传本次产物
           overwrite_files: true
           fail_on_unmatched_files: false
+          # Release 模式标记为 latest，Dev 不抢占
           make_latest: ${{ matrix.mode == 'release' && 'true' || 'false' }}
           body: |
             **发布类型**: ${{ steps.target.outputs.mode }}
