@@ -1,23 +1,14 @@
-name: Build Mesa (Release / Dev / All)
+name: Build Mesa (Release + Dev)
 
 on:
   schedule:
-    - cron: '0 2 * * *'          # 每天 UTC 02:00 自动构建 Release + Dev
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
-      mode:
-        description: '构建模式'
-        required: true
-        default: 'release'
-        type: choice
-        options:
-          - release   # 只构建稳定版
-          - dev       # 只构建开发版
-          - all       # 同时构建 Release + Dev
       version:
-        description: 'Release 版本号 / tag（如 26.3.1；dev 模式忽略；all 模式用于 release 部分）'
+        description: 'Release 版本号（留空自动检测最新稳定 tag）'
         required: false
-        default: '26.3.1'
+        default: ''
         type: string
 
 permissions:
@@ -25,148 +16,106 @@ permissions:
 
 env:
   MESA_REPO: https://gitlab.freedesktop.org/mesa/mesa.git
+  RELEASE_TAG: mesa-latest
 
 jobs:
-  # ── 0. 解析模式 → 矩阵列表 ────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      modes: ${{ steps.pick.outputs.modes }}
       version: ${{ steps.pick.outputs.version }}
     steps:
       - id: pick
         env:
-          GH_INPUT_MODE: ${{ github.event.inputs.mode }}
-          GH_INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT: ${{ github.event.inputs.version }}
         run: |
-          MODE="${GH_INPUT_MODE:-all}"
-          case "$MODE" in
-            release) MODES='["release"]' ;;
-            dev)     MODES='["dev"]' ;;
-            all)     MODES='["release","dev"]' ;;
-            *)       MODES='["dev"]' ;;
-          esac
-
-          if [[ "$MODES" == *release* ]]; then
-            if [ -n "$GH_INPUT_VERSION" ]; then
-              VER="$GH_INPUT_VERSION"
-            else
-              VER=$(git ls-remote --tags --refs \
-                      https://gitlab.freedesktop.org/mesa/mesa.git 'mesa-*' \
-                    | awk -F/ '{print $NF}' \
-                    | grep -E '^mesa-[0-9]+\.[0-9]+(\.[0-9]+)?$' \
-                    | sort -V | tail -1 \
-                    | sed 's/^mesa-//')
-              echo "Auto-detected latest stable: ${VER}"
-            fi
+          if [ -n "$INPUT" ]; then
+            VER="$INPUT"
           else
-            VER=""
+            VER=$(git ls-remote --tags --refs \
+                    "${{ env.MESA_REPO }}" 'mesa-*' \
+                  | awk -F/ '{print $NF}' \
+                  | grep -E '^mesa-[0-9]+\.[0-9]+(\.[0-9]+)?$' \
+                  | sort -V | tail -1 \
+                  | sed 's/^mesa-//')
           fi
-
-          echo "modes=${MODES}" >> $GITHUB_OUTPUT
           echo "version=${VER}" >> $GITHUB_OUTPUT
 
-  # ── 1. 构建（每个模式一个并行 job） ───────────────────────
   build:
     needs: prepare
     strategy:
       fail-fast: false
       matrix:
-        mode: ${{ fromJSON(needs.prepare.outputs.modes) }}
+        mode: [release, dev]
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 240
 
     steps:
-      # ── 1.1 解析 clone ref / date ──────────────────────────
       - name: Resolve target
         id: target
         run: |
           MODE="${{ matrix.mode }}"
-          DATE=$(date +%Y%m%d)
           if [ "$MODE" = "release" ]; then
-            VER_INPUT="${{ needs.prepare.outputs.version }}"
-            VER_INPUT="${VER_INPUT#v}"
-            if [[ "$VER_INPUT" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-              CLONE_REF="mesa-${VER_INPUT}"
+            V="${{ needs.prepare.outputs.version }}"
+            V="${V#v}"
+            if [[ "$V" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+              REF="mesa-${V}"
             else
-              CLONE_REF="${VER_INPUT}"
+              REF="$V"
             fi
           else
-            CLONE_REF="main"
+            REF="main"
           fi
-          echo "mode=${MODE}"           >> $GITHUB_OUTPUT
-          echo "clone_ref=${CLONE_REF}" >> $GITHUB_OUTPUT
-          echo "date=${DATE}"           >> $GITHUB_OUTPUT
+          echo "ref=${REF}"   >> $GITHUB_OUTPUT
+          echo "date=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
 
-      # ── 1.2 克隆源码（递归子模块） ─────────────────────────
-      - name: Clone Mesa source with submodules
+      - name: Clone Mesa
+        id: clone
         run: |
-          REF="${{ steps.target.outputs.clone_ref }}"
-          git clone --recurse-submodules --depth 1 --branch "$REF" \
+          git clone --recurse-submodules --depth 1 --branch "${{ steps.target.outputs.ref }}" \
             "${{ env.MESA_REPO }}" mesa-source \
           || git clone --recurse-submodules "${{ env.MESA_REPO }}" mesa-source
           cd mesa-source
           git submodule update --init --recursive
-          echo "HEAD: $(git log -1 --format='%H %s')"
+          echo "commit=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-      # ── 1.3 读取真实版本号 ────────────────────────────────
-      - name: Detect Mesa version
-        id: mesa_ver
+      - name: Detect version
+        id: ver
         working-directory: mesa-source
         run: |
           if [ -f VERSION ]; then
-            MV=$(tr -d '[:space:]' < VERSION)
+            V=$(tr -d '[:space:]' < VERSION)
           else
-            MV=$(grep -oP "version\s*:\s*'\K[^']+" meson.build | head -1)
+            V=$(grep -oP "version\s*:\s*'\K[^']+" meson.build | head -1)
           fi
-          echo "version=${MV}" >> $GITHUB_OUTPUT
-          echo "Detected Mesa version: ${MV}"
+          echo "version=${V}" >> $GITHUB_OUTPUT
 
-      # ── 1.4 生成 tag / title / 包名 ───────────────────────
-      - name: Compose release tag, title & package name
-        id: release
+      - name: Compose package name
+        id: pkg
         run: |
-          MODE="${{ steps.target.outputs.mode }}"
-          MV="${{ steps.mesa_ver.outputs.version }}"
-          DATE="${{ steps.target.outputs.date }}"
-          if [ "$MODE" = "release" ]; then
-            TAG="mesa-${MV}"
-            TITLE="Mesa ${MV} (Release)"
-            PRE="false"
-            PKG="mesa-${MV}-aarch64"
+          if [ "${{ matrix.mode }}" = "release" ]; then
+            echo "name=mesa-release-${{ steps.ver.outputs.version }}-aarch64" >> $GITHUB_OUTPUT
           else
-            TAG="mesa-dev-latest"
-            TITLE="Mesa Dev ${MV} (${DATE})"
-            PRE="true"
-            PKG="mesa-${MV}-${DATE}-aarch64"
+            echo "name=mesa-dev-${{ steps.ver.outputs.version }}-${{ steps.target.outputs.date }}-aarch64" >> $GITHUB_OUTPUT
           fi
-          echo "tag=${TAG}"        >> $GITHUB_OUTPUT
-          echo "title=${TITLE}"    >> $GITHUB_OUTPUT
-          echo "prerelease=${PRE}" >> $GITHUB_OUTPUT
-          echo "pkg=${PKG}"        >> $GITHUB_OUTPUT
 
-      # ── 1.5 Clang 21 / LLVM 21 ────────────────────────────
       - name: Install Clang 21 & LLVM 21
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang-21 llvm-21 lld-21 \
-            libclang-21-dev libclang-cpp21-dev \
+            clang-21 llvm-21 lld-21 libclang-21-dev libclang-cpp21-dev \
             libllvm21 llvm-21-dev libclc-21 libclc-21-dev
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-21 210
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-21 210
           sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-21 210
-          clang --version && llvm-config --version
 
-      # ── 1.6 核心依赖 ──────────────────────────────────────
-      - name: Install core Mesa build dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get install -y --no-install-recommends \
             meson ninja-build pkg-config cmake \
             python3-pip python3-mako python3-yaml python3-setuptools \
             bison flex byacc \
-            libdrm-dev libglvnd-dev libglvnd-core-dev \
-            libelf-dev zlib1g-dev libzstd-dev libexpat1-dev \
+            libdrm-dev libglvnd-dev libglvnd-core-dev libelf-dev \
+            zlib1g-dev libzstd-dev libexpat1-dev libsensors-dev \
             libx11-dev libxext-dev libxfixes-dev libx11-xcb-dev \
             libxcb-glx0-dev libxcb-shm0-dev libxcb-dri2-0-dev \
             libxcb-dri3-dev libxcb-present-dev libxcb-randr0-dev \
@@ -177,8 +126,7 @@ jobs:
             glslang-tools spirv-tools libvulkan-dev \
             wget gpg xz-utils
 
-      # ── 1.7 wayland-scanner ≥ 1.25.0 ──────────────────────
-      - name: Upgrade libwayland-bin from KDE Neon
+      - name: Upgrade wayland-scanner from KDE Neon
         run: |
           wget -qO- https://archive.neon.kde.org/public.key \
             | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/neon.gpg
@@ -186,20 +134,7 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/neon.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends -t resolute libwayland-bin
-          wayland-scanner --version
 
-      # ── 1.8 可选依赖（失败不阻塞） ─────────────────────────
-      - name: Install optional dependencies (best-effort)
-        continue-on-error: true
-        run: |
-          sudo apt-get install -y --no-install-recommends \
-            directx-headers-dev flatbuffers-compiler libflatbuffers-dev \
-            libxtensor-dev libsensors-dev valgrind \
-            python3-ply python3-pycparser python3-packaging \
-            libllvmspirvlib-21-dev llvm-spirv-21 \
-          || echo "::warning::部分可选依赖未安装，继续构建"
-
-      # ── 1.9 Meson 配置 ────────────────────────────────────
       - name: Meson setup
         working-directory: mesa-source
         env:
@@ -229,75 +164,93 @@ jobs:
             -Dbuildtype=release \
             -Db_ndebug=true
 
-      # ── 1.10 编译 & 安装 ──────────────────────────────────
-      - name: Ninja build
+      - name: Build & install
         working-directory: mesa-source
-        run: ninja -C build/ -j$(nproc)
-
-      - name: Install Mesa
-        working-directory: mesa-source
-        run: ninja -C build/ install
-
-      # ── 1.11 📦 打包为 tar.xz + sha256 ────────────────────
-      - name: Package into tar.xz
         run: |
-          PKG="${{ steps.release.outputs.pkg }}"
-          MV="${{ steps.mesa_ver.outputs.version }}"
+          ninja -C build/ -j$(nproc)
+          ninja -C build/ install
 
-          # 写入版本说明文件
+      - name: Package
+        run: |
+          PKG="${{ steps.pkg.outputs.name }}"
           cat > install/BUILD_INFO <<EOF
-          Mesa version : ${MV}
-          Mode         : ${{ steps.target.outputs.mode }}
-          Source ref   : ${{ steps.target.outputs.clone_ref }}
+          Mesa version : ${{ steps.ver.outputs.version }}
+          Mode         : ${{ matrix.mode }}
+          Source ref   : ${{ steps.target.outputs.ref }}
+          Mesa commit  : ${{ steps.clone.outputs.commit }}
           Build date   : ${{ steps.target.outputs.date }}
-          Commit       : ${{ github.sha }}
           Built with   : clang-21 / LLVM 21
           Arch         : aarch64
           EOF
-
-          # 重命名为带版本号的顶层目录，解压后目录结构清晰
           mv install "$PKG"
-
-          # 多线程 xz 压缩（-6 平衡速度与体积，-T0 用满所有核心）
-          tar --owner=0 --group=0 --numeric-owner -cf - "$PKG" \
-            | xz -T0 -6 > "${PKG}.tar.xz"
-
-          # 生成 sha256 校验文件
+          tar --owner=0 --group=0 --numeric-owner -cf - "$PKG" | xz -T0 -6 > "${PKG}.tar.xz"
           sha256sum "${PKG}.tar.xz" > "${PKG}.tar.xz.sha256"
+          cat > "meta-${{ matrix.mode }}.txt" <<EOF
+          MODE=${{ matrix.mode }}
+          VERSION=${{ steps.ver.outputs.version }}
+          REF=${{ steps.target.outputs.ref }}
+          COMMIT=${{ steps.clone.outputs.commit }}
+          DATE=${{ steps.target.outputs.date }}
+          PKG=$PKG
+          SIZE=$(du -h "${PKG}.tar.xz" | cut -f1)
+          EOF
 
-          echo "=== 打包结果 ==="
-          ls -lh "${PKG}.tar.xz" "${PKG}.tar.xz.sha256"
-          cat "${PKG}.tar.xz.sha256"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesa-${{ matrix.mode }}
+          path: |
+            ${{ steps.pkg.outputs.name }}.tar.xz
+            ${{ steps.pkg.outputs.name }}.tar.xz.sha256
+            meta-${{ matrix.mode }}.txt
+          retention-days: 1
 
-      # ── 1.12 发布（覆盖同一 Release，仅保留最新产物） ──────
-      - name: Publish to GitHub Release (overwrite)
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Compose body
+        id: body
+        run: |
+          R_VER=""; R_PKG=""; R_SIZE=""; R_COMMIT=""; R_DATE=""
+          D_VER=""; D_PKG=""; D_SIZE=""; D_COMMIT=""; D_DATE=""
+          for f in artifacts/meta-*.txt; do
+            source "$f"
+            if [ "$MODE" = "release" ]; then
+              R_VER="$VERSION"; R_PKG="$PKG"; R_SIZE="$SIZE"; R_COMMIT="$COMMIT"; R_DATE="$DATE"
+            else
+              D_VER="$VERSION"; D_PKG="$PKG"; D_SIZE="$SIZE"; D_COMMIT="$COMMIT"; D_DATE="$DATE"
+            fi
+          done
+          {
+            echo "| 项 | Release | Dev |"
+            echo "|---|---|---|"
+            echo "| Mesa 版本 | \`$R_VER\` | \`$D_VER\` |"
+            echo "| Mesa commit | \`$R_COMMIT\` | \`$D_COMMIT\` |"
+            echo "| 构建日期 | $R_DATE | $D_DATE |"
+            echo "| 包大小 | $R_SIZE | $D_SIZE |"
+            echo ""
+            echo "**构建时间**: ${{ github.run_started_at }}  "
+            echo "**架构**: aarch64  "
+            echo "**编译器**: clang-21 / LLVM 21"
+          } > body.md
+          echo "file=body.md" >> $GITHUB_OUTPUT
+
+      - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release.outputs.tag }}
-          name: ${{ steps.release.outputs.title }}
-          prerelease: ${{ steps.release.outputs.prerelease }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Mesa Latest (Release + Dev)
+          make_latest: true
           overwrite_files: true
           fail_on_unmatched_files: false
-          make_latest: ${{ matrix.mode == 'release' && 'true' || 'false' }}
-          body: |
-            **发布类型**: ${{ steps.target.outputs.mode }}
-            **Mesa 版本**: ${{ steps.mesa_ver.outputs.version }}
-            **源码引用**: `${{ steps.target.outputs.clone_ref }}`
-            **构建日期**: ${{ steps.target.outputs.date }}
-            **触发方式**: `${{ github.event_name }}`
-            **构建提交**: `${{ github.sha }}`
-            **构建时间**: ${{ github.event.head_commit.timestamp || github.run_started_at }}
-            **架构**: aarch64
-            **编译器**: clang-21 / LLVM 21
-
-            ### 使用方式
-            ```bash
-            tar -xf ${{ steps.release.outputs.pkg }}.tar.xz
-            cd ${{ steps.release.outputs.pkg }}
-            # 内容为 Mesa 安装树，可直接 rsync 到系统根目录或设置
-            # LIBGL_DRIVERS_PATH / VK_ICD_FILENAMES 指向对应文件
-            ```
+          body_path: ${{ steps.body.outputs.file }}
           files: |
-            ${{ steps.release.outputs.pkg }}.tar.xz
-            ${{ steps.release.outputs.pkg }}.tar.xz.sha256
+            artifacts/*.tar.xz
+            artifacts/*.tar.xz.sha256
           token: ${{ secrets.GITHUB_TOKEN }}
