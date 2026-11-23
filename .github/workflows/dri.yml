@@ -39,7 +39,6 @@ jobs:
           GH_INPUT_MODE: ${{ github.event.inputs.mode }}
           GH_INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          # 定时触发无 inputs → 默认 all（Release + Dev 全量）
           MODE="${GH_INPUT_MODE:-all}"
           case "$MODE" in
             release) MODES='["release"]' ;;
@@ -48,12 +47,10 @@ jobs:
             *)       MODES='["dev"]' ;;
           esac
 
-          # 需要 Release 时确定版本号
           if [[ "$MODES" == *release* ]]; then
             if [ -n "$GH_INPUT_VERSION" ]; then
               VER="$GH_INPUT_VERSION"
             else
-              # 定时触发：自动获取最新稳定 tag（过滤 rc/beta，按版本排序取最大）
               VER=$(git ls-remote --tags --refs \
                       https://gitlab.freedesktop.org/mesa/mesa.git 'mesa-*' \
                     | awk -F/ '{print $NF}' \
@@ -73,7 +70,7 @@ jobs:
   build:
     needs: prepare
     strategy:
-      fail-fast: false          # all 模式下一个失败不影响另一个
+      fail-fast: false
       matrix:
         mode: ${{ fromJSON(needs.prepare.outputs.modes) }}
     runs-on: ubuntu-26.04-arm
@@ -125,10 +122,8 @@ jobs:
           echo "version=${MV}" >> $GITHUB_OUTPUT
           echo "Detected Mesa version: ${MV}"
 
-      # ── 1.4 生成 tag / title ──────────────────────────────
-      # Dev：固定 tag = mesa-dev-latest，覆盖同一 Release
-      # Release：tag = mesa-<version>，覆盖同版本 Release
-      - name: Compose release tag & title
+      # ── 1.4 生成 tag / title / 包名 ───────────────────────
+      - name: Compose release tag, title & package name
         id: release
         run: |
           MODE="${{ steps.target.outputs.mode }}"
@@ -138,14 +133,17 @@ jobs:
             TAG="mesa-${MV}"
             TITLE="Mesa ${MV} (Release)"
             PRE="false"
+            PKG="mesa-${MV}-aarch64"
           else
             TAG="mesa-dev-latest"
             TITLE="Mesa Dev ${MV} (${DATE})"
             PRE="true"
+            PKG="mesa-${MV}-${DATE}-aarch64"
           fi
           echo "tag=${TAG}"        >> $GITHUB_OUTPUT
           echo "title=${TITLE}"    >> $GITHUB_OUTPUT
           echo "prerelease=${PRE}" >> $GITHUB_OUTPUT
+          echo "pkg=${PKG}"        >> $GITHUB_OUTPUT
 
       # ── 1.5 Clang 21 / LLVM 21 ────────────────────────────
       - name: Install Clang 21 & LLVM 21
@@ -177,7 +175,7 @@ jobs:
             x11proto-dev linux-libc-dev \
             libwayland-dev libwayland-egl-backend-dev \
             glslang-tools spirv-tools libvulkan-dev \
-            wget gpg
+            wget gpg xz-utils
 
       # ── 1.7 wayland-scanner ≥ 1.25.0 ──────────────────────
       - name: Upgrade libwayland-bin from KDE Neon
@@ -240,17 +238,46 @@ jobs:
         working-directory: mesa-source
         run: ninja -C build/ install
 
-      # ── 1.11 发布（覆盖同一 Release，仅保留最新产物） ───────
+      # ── 1.11 📦 打包为 tar.xz + sha256 ────────────────────
+      - name: Package into tar.xz
+        run: |
+          PKG="${{ steps.release.outputs.pkg }}"
+          MV="${{ steps.mesa_ver.outputs.version }}"
+
+          # 写入版本说明文件
+          cat > install/BUILD_INFO <<EOF
+          Mesa version : ${MV}
+          Mode         : ${{ steps.target.outputs.mode }}
+          Source ref   : ${{ steps.target.outputs.clone_ref }}
+          Build date   : ${{ steps.target.outputs.date }}
+          Commit       : ${{ github.sha }}
+          Built with   : clang-21 / LLVM 21
+          Arch         : aarch64
+          EOF
+
+          # 重命名为带版本号的顶层目录，解压后目录结构清晰
+          mv install "$PKG"
+
+          # 多线程 xz 压缩（-6 平衡速度与体积，-T0 用满所有核心）
+          tar --owner=0 --group=0 --numeric-owner -cf - "$PKG" \
+            | xz -T0 -6 > "${PKG}.tar.xz"
+
+          # 生成 sha256 校验文件
+          sha256sum "${PKG}.tar.xz" > "${PKG}.tar.xz.sha256"
+
+          echo "=== 打包结果 ==="
+          ls -lh "${PKG}.tar.xz" "${PKG}.tar.xz.sha256"
+          cat "${PKG}.tar.xz.sha256"
+
+      # ── 1.12 发布（覆盖同一 Release，仅保留最新产物） ──────
       - name: Publish to GitHub Release (overwrite)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           name: ${{ steps.release.outputs.title }}
           prerelease: ${{ steps.release.outputs.prerelease }}
-          # 先清空该 Release 的全部旧资产，再上传本次产物
           overwrite_files: true
           fail_on_unmatched_files: false
-          # Release 模式标记为 latest，Dev 不抢占
           make_latest: ${{ matrix.mode == 'release' && 'true' || 'false' }}
           body: |
             **发布类型**: ${{ steps.target.outputs.mode }}
@@ -260,5 +287,17 @@ jobs:
             **触发方式**: `${{ github.event_name }}`
             **构建提交**: `${{ github.sha }}`
             **构建时间**: ${{ github.event.head_commit.timestamp || github.run_started_at }}
-          files: install/**/*
+            **架构**: aarch64
+            **编译器**: clang-21 / LLVM 21
+
+            ### 使用方式
+            ```bash
+            tar -xf ${{ steps.release.outputs.pkg }}.tar.xz
+            cd ${{ steps.release.outputs.pkg }}
+            # 内容为 Mesa 安装树，可直接 rsync 到系统根目录或设置
+            # LIBGL_DRIVERS_PATH / VK_ICD_FILENAMES 指向对应文件
+            ```
+          files: |
+            ${{ steps.release.outputs.pkg }}.tar.xz
+            ${{ steps.release.outputs.pkg }}.tar.xz.sha256
           token: ${{ secrets.GITHUB_TOKEN }}
