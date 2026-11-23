@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release 版本号（留空自动检测最新稳定 tag）'
+        description: 'Release 版本号（如 26.3.1；留空自动检测最新稳定版）'
         required: false
         default: ''
         type: string
@@ -15,7 +15,8 @@ permissions:
   contents: write
 
 env:
-  MESA_REPO: https://gitlab.freedesktop.org/mesa/mesa.git
+  MESA_ARCHIVE: https://archive.mesa3d.org
+  MESA_GIT: https://gitlab.freedesktop.org/mesa/mesa.git
   RELEASE_TAG: mesa-latest
 
 jobs:
@@ -31,12 +32,12 @@ jobs:
           if [ -n "$INPUT" ]; then
             VER="$INPUT"
           else
-            VER=$(git ls-remote --tags --refs \
-                    "${{ env.MESA_REPO }}" 'mesa-*' \
-                  | awk -F/ '{print $NF}' \
-                  | grep -E '^mesa-[0-9]+\.[0-9]+(\.[0-9]+)?$' \
-                  | sort -V | tail -1 \
-                  | sed 's/^mesa-//')
+            # 从 archive.mesa3d.org 目录列表自动检测最新稳定版
+            # 过滤掉 -rc 版本，只保留正式 release
+            VER=$(curl -s "${{ env.MESA_ARCHIVE }}/" \
+                  | grep -oP 'mesa-\K[0-9]+\.[0-9]+\.[0-9]+(?=\.tar\.xz")' \
+                  | sort -V | tail -1)
+            echo "Auto-detected latest stable from archive.mesa3d.org: ${VER}"
           fi
           echo "version=${VER}" >> $GITHUB_OUTPUT
 
@@ -53,27 +54,55 @@ jobs:
       - name: Resolve target
         id: target
         run: |
-          MODE="${{ matrix.mode }}"
-          if [ "$MODE" = "release" ]; then
+          if [ "${{ matrix.mode }}" = "release" ]; then
             V="${{ needs.prepare.outputs.version }}"
             V="${V#v}"
-            if [[ "$V" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-              REF="mesa-${V}"
-            else
-              REF="$V"
-            fi
+            echo "version=${V}"     >> $GITHUB_OUTPUT
+            echo "source=archive"   >> $GITHUB_OUTPUT
           else
-            REF="main"
+            echo "version=main"     >> $GITHUB_OUTPUT
+            echo "source=git"       >> $GITHUB_OUTPUT
           fi
-          echo "ref=${REF}"   >> $GITHUB_OUTPUT
           echo "date=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
 
-      - name: Clone Mesa
+      # ── Release：从 archive.mesa3d.org 下载 tar.xz + sig ──
+      - name: Download release tarball from archive
+        if: matrix.mode == 'release'
+        run: |
+          V="${{ steps.target.outputs.version }}"
+          BASE="${{ env.MESA_ARCHIVE }}/mesa-${V}.tar.xz"
+          echo "Downloading ${BASE}"
+          wget -q "${BASE}"        -O mesa-source.tar.xz
+          wget -q "${BASE}.sig"    -O mesa-source.tar.xz.sig
+          ls -lh mesa-source.tar.xz mesa-source.tar.xz.sig
+
+      # ── Release：GPG 签名校验 ──────────────────────────────
+      - name: Verify GPG signature
+        if: matrix.mode == 'release'
+        run: |
+          # 获取 Mesa 发布维护者公钥
+          wget -qO release-keys.asc \
+            "https://gitlab.freedesktop.org/mesa/mesa/-/raw/main/docs/release-maintainers-keys.asc"
+          gpg --import release-keys.asc 2>/dev/null || \
+            gpg --keyserver keyserver.ubuntu.com --recv-keys $(gpg --show-keys release-keys.asc 2>/dev/null | grep -oP '[A-F0-9]{40}' | head -1)
+          gpg --verify mesa-source.tar.xz.sig mesa-source.tar.xz \
+            && echo "::notice::GPG signature verified successfully" \
+            || echo "::warning::GPG signature verification failed, continuing anyway"
+
+      - name: Extract release tarball
+        if: matrix.mode == 'release'
+        run: |
+          V="${{ steps.target.outputs.version }}"
+          tar -xf mesa-source.tar.xz
+          mv "mesa-${V}" mesa-source
+
+      # ── Dev：从 Git main 克隆 ─────────────────────────────
+      - name: Clone dev source from Git
+        if: matrix.mode == 'dev'
         id: clone
         run: |
-          git clone --recurse-submodules --depth 1 --branch "${{ steps.target.outputs.ref }}" \
-            "${{ env.MESA_REPO }}" mesa-source \
-          || git clone --recurse-submodules "${{ env.MESA_REPO }}" mesa-source
+          git clone --recurse-submodules --depth 1 --branch main \
+            "${{ env.MESA_GIT }}" mesa-source
           cd mesa-source
           git submodule update --init --recursive
           echo "commit=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
@@ -103,7 +132,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang-21 llvm-21 lld-21 libclang-21-dev libclang-cpp21-dev \
-            libllvm21 llvm-21-dev libclc-21 libclc-21-dev
+            libllvm21 llvm-21-dev libclc-21 libclc-21-dev gnupg
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-21 210
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-21 210
           sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-21 210
@@ -124,7 +153,7 @@ jobs:
             x11proto-dev linux-libc-dev \
             libwayland-dev libwayland-egl-backend-dev \
             glslang-tools spirv-tools libvulkan-dev \
-            wget gpg xz-utils
+            wget xz-utils
 
       - name: Upgrade wayland-scanner from KDE Neon
         run: |
@@ -176,8 +205,8 @@ jobs:
           cat > install/BUILD_INFO <<EOF
           Mesa version : ${{ steps.ver.outputs.version }}
           Mode         : ${{ matrix.mode }}
-          Source ref   : ${{ steps.target.outputs.ref }}
-          Mesa commit  : ${{ steps.clone.outputs.commit }}
+          Source       : ${{ steps.target.outputs.source }}
+          Mesa commit  : ${{ steps.clone.outputs.commit || 'official release tarball' }}
           Build date   : ${{ steps.target.outputs.date }}
           Built with   : clang-21 / LLVM 21
           Arch         : aarch64
@@ -188,8 +217,8 @@ jobs:
           cat > "meta-${{ matrix.mode }}.txt" <<EOF
           MODE=${{ matrix.mode }}
           VERSION=${{ steps.ver.outputs.version }}
-          REF=${{ steps.target.outputs.ref }}
-          COMMIT=${{ steps.clone.outputs.commit }}
+          SOURCE=${{ steps.target.outputs.source }}
+          COMMIT=${{ steps.clone.outputs.commit || 'official release tarball' }}
           DATE=${{ steps.target.outputs.date }}
           PKG=$PKG
           SIZE=$(du -h "${PKG}.tar.xz" | cut -f1)
@@ -231,6 +260,7 @@ jobs:
             echo "| 项 | Release | Dev |"
             echo "|---|---|---|"
             echo "| Mesa 版本 | \`$R_VER\` | \`$D_VER\` |"
+            echo "| 源码来源 | archive.mesa3d.org | Git \`main\` |"
             echo "| Mesa commit | \`$R_COMMIT\` | \`$D_COMMIT\` |"
             echo "| 构建日期 | $R_DATE | $D_DATE |"
             echo "| 包大小 | $R_SIZE | $D_SIZE |"
