@@ -192,7 +192,7 @@ jobs:
           ninja -C build/ -j$(nproc)
           ninja -C build/ install
 
-      # ── 打包 + 元数据（无日期字段） ──────────────────────────
+      # ── 打包 + 元数据 ──────────────────────────────────────
       - name: Package
         run: |
           PKG="${{ steps.pkg.outputs.name }}"
@@ -278,12 +278,17 @@ jobs:
           cat body.md
           echo "file=body.md" >> $GITHUB_OUTPUT
 
-      # 删除旧 release + tag，保证固定 tag 全量覆盖
+      # ── 强制清空旧的 Release 和 Tag ──────────────────────
       - name: Delete existing release and tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete "${{ env.RELEASE_TAG }}" --yes --cleanup-tag 2>/dev/null || true
+          echo "正在删除旧的 Release 及 Tag..."
+          # 1. 通过 API 删除整个 Release 记录（连同历史 Assets 彻底清空）
+          gh release delete "${{ env.RELEASE_TAG }}" --repo "${{ github.repository }}" --yes --cleanup-tag || true
+          # 2. 强制清理远端 Tag（双重保险）
+          git push origin :refs/tags/${{ env.RELEASE_TAG }} || true
+          echo "清理完成，准备发布最新版本。"
 
       - name: Publish
         uses: softprops/action-gh-release@v2
