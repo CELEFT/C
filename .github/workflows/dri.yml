@@ -61,7 +61,6 @@ jobs:
             echo "version=main"     >> $GITHUB_OUTPUT
             echo "source=git"       >> $GITHUB_OUTPUT
           fi
-          echo "date=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
 
       # ── Release：archive 下载 + GPG 校验 ────────────────────
       - name: Download release tarball from archive
@@ -118,7 +117,7 @@ jobs:
           if [ "${{ matrix.mode }}" = "release" ]; then
             echo "name=mesa-release-${{ steps.ver.outputs.version }}-aarch64" >> $GITHUB_OUTPUT
           else
-            echo "name=mesa-dev-${{ steps.ver.outputs.version }}-${{ steps.target.outputs.date }}-aarch64" >> $GITHUB_OUTPUT
+            echo "name=mesa-dev-${{ steps.ver.outputs.version }}-aarch64" >> $GITHUB_OUTPUT
           fi
 
       - name: Install Clang 21 & LLVM 21
@@ -193,14 +192,13 @@ jobs:
           ninja -C build/ -j$(nproc)
           ninja -C build/ install
 
-      # ── 打包 + 元数据（所有值无空格） ──────────────────────
+      # ── 打包 + 元数据（无日期字段） ──────────────────────────
       - name: Package
         run: |
           PKG="${{ steps.pkg.outputs.name }}"
           MODE="${{ matrix.mode }}"
           V="${{ steps.ver.outputs.version }}"
           SRC="${{ steps.target.outputs.source }}"
-          DATE="${{ steps.target.outputs.date }}"
           MESA_COMMIT="${{ steps.clone.outputs.commit }}"
           [ -z "$MESA_COMMIT" ] && MESA_COMMIT="tarball"
 
@@ -209,7 +207,6 @@ jobs:
           Mode         : ${MODE}
           Source       : ${SRC}
           Mesa commit  : ${MESA_COMMIT}
-          Build date   : ${DATE}
           Built with   : clang-21 / LLVM 21
           Arch         : aarch64
           EOF
@@ -217,13 +214,11 @@ jobs:
           tar --owner=0 --group=0 --numeric-owner -cf - "$PKG" | xz -T0 -6 > "${PKG}.tar.xz"
           sha256sum "${PKG}.tar.xz" > "${PKG}.tar.xz.sha256"
 
-          # 所有值均无空格，source 时不会误执行
           cat > "meta-${MODE}.txt" <<EOF
           MODE=${MODE}
           VERSION=${V}
           SOURCE=${SRC}
           COMMIT=${MESA_COMMIT}
-          DATE=${DATE}
           PKG=${PKG}
           SIZE=$(du -h "${PKG}.tar.xz" | cut -f1)
           EOF
@@ -252,22 +247,20 @@ jobs:
       - name: Compose body
         id: body
         run: |
-          R_VER=""; R_PKG=""; R_SIZE=""; R_COMMIT=""; R_DATE=""
-          D_VER=""; D_PKG=""; D_SIZE=""; D_COMMIT=""; D_DATE=""
+          R_VER=""; R_PKG=""; R_SIZE=""; R_COMMIT=""
+          D_VER=""; D_PKG=""; D_SIZE=""; D_COMMIT=""
 
-          # 用 grep + cut 解析，不 source，彻底避免特殊字符问题
           for f in artifacts/meta-*.txt; do
             [ -f "$f" ] || continue
-            MODE=$(grep '^MODE='   "$f" | cut -d= -f2-)
+            MODE=$(grep '^MODE='    "$f" | cut -d= -f2-)
             V=$(   grep '^VERSION=' "$f" | cut -d= -f2-)
-            C=$(   grep '^COMMIT=' "$f" | cut -d= -f2-)
-            D=$(   grep '^DATE='   "$f" | cut -d= -f2-)
-            P=$(   grep '^PKG='    "$f" | cut -d= -f2-)
-            S=$(   grep '^SIZE='   "$f" | cut -d= -f2-)
+            C=$(   grep '^COMMIT='  "$f" | cut -d= -f2-)
+            P=$(   grep '^PKG='     "$f" | cut -d= -f2-)
+            S=$(   grep '^SIZE='    "$f" | cut -d= -f2-)
             if [ "$MODE" = "release" ]; then
-              R_VER="$V"; R_PKG="$P"; R_SIZE="$S"; R_COMMIT="$C"; R_DATE="$D"
+              R_VER="$V"; R_PKG="$P"; R_SIZE="$S"; R_COMMIT="$C"
             else
-              D_VER="$V"; D_PKG="$P"; D_SIZE="$S"; D_COMMIT="$C"; D_DATE="$D"
+              D_VER="$V"; D_PKG="$P"; D_SIZE="$S"; D_COMMIT="$C"
             fi
           done
 
@@ -277,15 +270,20 @@ jobs:
             echo "| Mesa 版本 | \`$R_VER\` | \`$D_VER\` |"
             echo "| 源码来源 | archive.mesa3d.org | Git \`main\` |"
             echo "| Mesa commit | \`$R_COMMIT\` | \`$D_COMMIT\` |"
-            echo "| 构建日期 | $R_DATE | $D_DATE |"
             echo "| 包大小 | $R_SIZE | $D_SIZE |"
             echo ""
-            echo "**构建时间**: ${{ github.run_started_at }}  "
             echo "**架构**: aarch64  "
             echo "**编译器**: clang-21 / LLVM 21"
           } > body.md
           cat body.md
           echo "file=body.md" >> $GITHUB_OUTPUT
+
+      # 删除旧 release + tag，保证固定 tag 全量覆盖
+      - name: Delete existing release and tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete "${{ env.RELEASE_TAG }}" --yes --cleanup-tag 2>/dev/null || true
 
       - name: Publish
         uses: softprops/action-gh-release@v2
