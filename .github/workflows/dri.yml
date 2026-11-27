@@ -192,7 +192,7 @@ jobs:
           ninja -C build/ -j$(nproc)
           ninja -C build/ install
 
-      # ── 打包 + 元数据 ──────────────────────────────────────
+      # ── 打包 + 元数据 + 自动生成 ICD ─────────────────────────
       - name: Package
         run: |
           PKG="${{ steps.pkg.outputs.name }}"
@@ -202,6 +202,7 @@ jobs:
           MESA_COMMIT="${{ steps.clone.outputs.commit }}"
           [ -z "$MESA_COMMIT" ] && MESA_COMMIT="tarball"
 
+          # 1. 写入构建信息
           cat > install/BUILD_INFO <<EOF
           Mesa version : ${V}
           Mode         : ${MODE}
@@ -210,10 +211,26 @@ jobs:
           Built with   : clang-21 / LLVM 21
           Arch         : aarch64
           EOF
+
+          # 2. 自动生成 Vulkan ICD 配置
+          mkdir -p install/share/vulkan/icd.d
+          cat > install/share/vulkan/icd.d/freedreno_icd.aarch64.json <<EOF
+          {
+              "ICD": {
+                  "api_version": "1.4.368",
+                  "library_arch": "64",
+                  "library_path": "PACKAGE_ROOT/lib/aarch64-linux-gnu/libvulkan_freedreno.so"
+              },
+              "file_format_version": "1.0.1"
+          }
+          EOF
+
+          # 3. 重命名目录并打包
           mv install "$PKG"
           tar --owner=0 --group=0 --numeric-owner -cf - "$PKG" | xz -T0 -6 > "${PKG}.tar.xz"
           sha256sum "${PKG}.tar.xz" > "${PKG}.tar.xz.sha256"
 
+          # 4. 写入 Meta 数据
           cat > "meta-${MODE}.txt" <<EOF
           MODE=${MODE}
           VERSION=${V}
@@ -274,19 +291,44 @@ jobs:
             echo ""
             echo "**架构**: aarch64  "
             echo "**编译器**: clang-21 / LLVM 21"
+            echo ""
+            echo "---"
+            echo "### 🛠️ 使用说明 / 环境配置"
+            echo "包内已包含预编译的 **Turnip (Freedreno)** Vulkan 驱动和 **Zink** OpenGL 驱动。"
+            echo ""
+            echo "#### 1. 配置 Vulkan 驱动 (Turnip)"
+            echo "由于 Vulkan Loader 需要绝对路径，解压后请使用以下命令修正 ICD 路径并启用："
+            echo "\`\`\`bash"
+            echo "# 将 <解压后的绝对路径> 替换为你实际的路径，例如 /data/local/tmp"
+            echo "PKG_DIR=\$(pwd)/mesa-dev-$D_VER-aarch64"
+            echo "sed -i \"s|PACKAGE_ROOT|\$PKG_DIR|g\" \"\$PKG_DIR/share/vulkan/icd.d/freedreno_icd.aarch64.json\""
+            echo "export VK_DRIVER_FILES=\"\$PKG_DIR/share/vulkan/icd.d/freedreno_icd.aarch64.json\""
+            echo "\`\`\`"
+            echo ""
+            echo "#### 2. 启用 OpenGL 硬件加速 (Zink)"
+            echo "通过 Vulkan 层将 OpenGL 转换为硬件加速："
+            echo "\`\`\`bash"
+            echo "export MESA_LOADER_DRIVER_OVERRIDE=zink"
+            echo "export GALLIUM_DRIVER=zink"
+            echo "\`\`\`"
+            echo ""
+            echo "#### 3. 无 GPU 环境 (软件渲染回退)"
+            echo "如果在 CI 或无 GPU 环境中测试："
+            echo "\`\`\`bash"
+            echo "export LIBGL_ALWAYS_SOFTWARE=1"
+            echo "export GALLIUM_DRIVER=llvmpipe"
+            echo "\`\`\`"
           } > body.md
           cat body.md
           echo "file=body.md" >> $GITHUB_OUTPUT
 
-      # ── 强制清空旧的 Release 和 Tag ──────────────────────
+      # 强制清空旧的 Release 和 Tag，保证固定 tag 全量覆盖
       - name: Delete existing release and tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "正在删除旧的 Release 及 Tag..."
-          # 1. 通过 API 删除整个 Release 记录（连同历史 Assets 彻底清空）
           gh release delete "${{ env.RELEASE_TAG }}" --repo "${{ github.repository }}" --yes --cleanup-tag || true
-          # 2. 强制清理远端 Tag（双重保险）
           git push origin :refs/tags/${{ env.RELEASE_TAG }} || true
           echo "清理完成，准备发布最新版本。"
 
